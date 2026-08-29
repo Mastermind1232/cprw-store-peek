@@ -1,0 +1,38 @@
+{
+  "id": "cprw-store-peek",
+  "title": "CPR Wizards Store \u2014 Item Peek",
+  "description": "Click an item's name inside the Cyberpunk RED Wizards store to open its item sheet, instead of hunting for it in a compendium.",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "name": "Adam Meehan"
+    }
+  ],
+  "compatibility": {
+    "minimum": "12",
+    "verified": "13"
+  },
+  "relationships": {
+    "systems": [
+      {
+        "id": "cyberpunk-red-core",
+        "type": "system",
+        "compatibility": {}
+      }
+    ],
+    "requires": [
+      {
+        "id": "cyberpunk-red-wizards",
+        "type": "module",
+        "compatibility": {}
+      }
+    ]
+  },
+  "esmodules": [
+    "main.js"
+  ],
+  "license": "MIT",
+  "url": "https://github.com/Mastermind1232/cprw-store-peek",
+  "manifest": "https://raw.githubusercontent.com/Mastermind1232/cprw-store-peek/main/module.json",
+  "download": "https://github.com/Mastermind1232/cprw-store-peek/releases/download/v1.0.0/module.zip"
+}
