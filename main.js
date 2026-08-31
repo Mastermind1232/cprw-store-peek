@@ -201,6 +201,73 @@ function wirePeek(root) {
   });
 }
 
+/**
+ * The host loads each item's icon and then never renders it. Icons come from
+ * the compendium index, which Foundry keeps in memory, so no documents are
+ * loaded to draw them.
+ */
+function imgFor(uuid) {
+  const parts = String(uuid).split(".");
+  if (parts[0] === "Item") return game.items.get(parts[1])?.img ?? null;
+  if (parts[0] === "Compendium") {
+    const id = parts[parts.length - 1];
+    const packId = parts.slice(1, -2).join(".");
+    return game.packs.get(packId)?.index?.get(id)?.img ?? null;
+  }
+  return null;
+}
+
+let _warmed = false;
+
+/** Most indexes are loaded at startup; any that are not get pulled in once. */
+async function warmIndexes() {
+  if (_warmed) return;
+  _warmed = true;
+  const cold = game.packs.filter((p) => p.metadata.type === "Item" && !p.indexed);
+  if (!cold.length) return;
+  await Promise.all(cold.map((p) => p.getIndex().catch(() => null)));
+  rerender();
+}
+
+function addIcons(root) {
+  let missed = false;
+
+  root.querySelectorAll(ROW).forEach((row) => {
+    if (row.querySelector(".cprw-icon")) return;
+    const uuid = row.dataset.uuid;
+    if (!uuid) return;
+
+    const src = imgFor(uuid);
+    if (!src) { missed = true; return; }
+
+    const img = document.createElement("img");
+    img.className = "cprw-icon";
+    img.src = src;
+    img.alt = "";
+    img.title = "Open item sheet";
+    img.style.cssText =
+      "width:34px;height:34px;object-fit:contain;flex:0 0 auto;" +
+      "margin-right:.6em;border:none;cursor:pointer;background:none;";
+    // Dimmed rows dim only the text block, so match it here.
+    if (row.classList.contains("crw-store-unaffordable")) img.style.opacity = "0.4";
+
+    img.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const doc = await fromUuid(uuid).catch(() => null);
+      if (doc) doc.sheet.render(true);
+    });
+
+    // The row is space-between, so the text block has to absorb the slack or
+    // the icon and the buttons would drift apart.
+    const info = row.querySelector(NAME);
+    if (info) info.style.flex = "1 1 auto";
+    row.prepend(img);
+  });
+
+  if (missed) warmIndexes().catch(reportErr);
+}
+
 function applyStore(root, store) {
   const byUuid = new Map(store.items.map((i) => [i.uuid, i]));
 
@@ -913,6 +980,9 @@ Hooks.on("renderStoreApp", (app, element) => {
         if (live !== store.markup) mutateStore(store.id, (s) => (s.markup = live));
       }
     }
+
+    // Last, so rows the store filtered out are never decorated.
+    addIcons(root);
   } catch (err) {
     console.error(`${ID} | failed decorating the store`, err);
   }

@@ -2,7 +2,7 @@
   "id": "cprw-store-peek",
   "title": "CPR Wizards Store: Shopfront",
   "description": "Adds named stores to the Cyberpunk RED Wizards store. Build a roster by hand-picking, snapshotting the current filters, or rolling one at random; give it a markup and limited or unlimited supply; then switch which store the players are looking at from a dropdown. Also lets anyone click an item's name to open its sheet.",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "authors": [
     {
       "name": "Adam Meehan"
@@ -34,5 +34,5 @@
   "license": "MIT",
   "url": "https://github.com/Mastermind1232/cprw-store-peek",
   "manifest": "https://raw.githubusercontent.com/Mastermind1232/cprw-store-peek/main/module.json",
-  "download": "https://github.com/Mastermind1232/cprw-store-peek/releases/download/v1.5.1/module.zip"
+  "download": "https://github.com/Mastermind1232/cprw-store-peek/releases/download/v1.6.0/module.zip"
 }
