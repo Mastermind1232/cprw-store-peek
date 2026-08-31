@@ -195,8 +195,8 @@ function wirePeek(root) {
       const uuid = el.closest("[data-uuid]")?.dataset?.uuid;
       if (!uuid) return;
       const doc = await fromUuid(uuid).catch(() => null);
-      if (doc) doc.sheet.render(true);
-      else ui.notifications.warn("Could not find that item.");
+      if (!doc) return ui.notifications.warn("Could not find that item.");
+      try { doc.sheet.render(true); } catch (err) { reportErr(err); }
     });
   });
 }
@@ -255,7 +255,8 @@ function addIcons(root) {
       ev.preventDefault();
       ev.stopPropagation();
       const doc = await fromUuid(uuid).catch(() => null);
-      if (doc) doc.sheet.render(true);
+      if (!doc) return;
+      try { doc.sheet.render(true); } catch (err) { reportErr(err); }
     });
 
     // The row is space-between, so the text block has to absorb the slack or
@@ -304,6 +305,19 @@ function applyStore(root, store) {
     }
     div.remove();
   });
+
+  if (!store.items.length) {
+    const list = root.querySelector(".crw-store-items");
+    if (list && !list.querySelector(".cprw-empty")) {
+      const note = document.createElement("p");
+      note.className = "cprw-empty";
+      note.style.cssText = "opacity:.6;text-align:center;padding:2em 0";
+      note.textContent = game.user.isGM
+        ? `"${store.name}" has no items in it. Add some from Manage Stores.`
+        : "Nothing for sale right now.";
+      list.appendChild(note);
+    }
+  }
 
   // Hide category tabs this store carries nothing for
   const stockedTypes = new Set(store.items.map((i) => i.type));
@@ -389,7 +403,7 @@ function stockTag(row, store, stocked, left) {
  * Keyed by actor and item name, queued so repeat buys of one item each count.
  */
 const pending = new Map();
-const INTENT_TTL = 5 * 60 * 1000;
+const INTENT_TTL = 90 * 1000;   // long enough to answer a confirm box, short enough not to catch an unrelated item later
 
 function intendSale(root, store, uuid, name) {
   const actorId = root.querySelector(".crw-store-actor-select")?.value;
@@ -1077,6 +1091,16 @@ function recordSale(storeId, uuid) {
 const reportErr = (err) => console.error(`${ID} | ${err?.message ?? err}`, err);
 
 Hooks.once("ready", () => {
+  // A switch interrupted midway (browser closed, session dropped) can leave the
+  // catalogue's filters parked with no store live to explain it. Put them back.
+  if (game.user.isGM && !getActiveId()) {
+    const parked = game.settings.get(ID, "catalogueFilters");
+    if (parked?.availability) {
+      console.warn(`${ID} | catalogue filters were left parked, restoring them`);
+      restoreCatalogue().catch(reportErr);
+    }
+  }
+
   Hooks.on("createItem", (item, options, userId) => {
     if (userId !== game.user.id) return;      // only the client that bought reports it
     if (!(item.parent instanceof Actor)) return;

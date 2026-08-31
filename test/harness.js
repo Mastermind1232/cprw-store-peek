@@ -7,6 +7,7 @@ const ID = "cprw-store-peek";
 const hooks = {};
 const Hooks = { once: (k, f) => (hooks[k] ??= []).push(f), on: (k, f) => (hooks[k] ??= []).push(f) };
 
+const emitted = [];
 const store = new Map();
 const reg = new Map();
 let writeLog = [];
@@ -24,7 +25,7 @@ const game = {
   },
   user: { isGM: true, id: "gm1" },
   users: [{ id: "gm1", isGM: true, active: true }],
-  items: [], packs: [], socket: { on() {}, emit() {} },
+  items: [], packs: [], socket: { on() {}, emit(...a) { emitted.push(a); } },
 };
 const ui = { notifications: { info() {}, warn() {}, error() {} }, windows: {} };
 const foundry = {
@@ -45,7 +46,7 @@ store.set(`${CRW}.storeExcludedPacks`, {});
 
 const mod = new Function(
   "Hooks", "game", "ui", "foundry", "document", "Dialog", "Actor", "fromUuid", "console",
-  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor };"
+  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue };"
 )(Hooks, game, ui, foundry, {}, class {}, class {}, async () => null, { log() {}, warn() {}, error() {}, debug() {} });
 
 hooks.init.forEach(f => f());
@@ -200,11 +201,50 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
   check("T15 remove drops exactly one", e2.items.length === 2 &&
     !e2.items.some(i => i.uuid === e.items[1].uuid));
 
-  // --- T11: deleting the live store must restore the catalogue
-  await mod.queueWrite(async () => mod.saveStores(mod.getStores().filter(s => s.id !== "A")));
-  await mod.activate("");
+  // --- T16: a player must never write world state, only ask a GM to
+  await mod.saveStores([{ id: "P", name: "Shop", markup: 100, limited: true,
+    items: [{ uuid: "Item.w1", name: "W1", type: "weapon", price: 50, qty: 2, remaining: 2 }] }]);
+  emitted.length = 0;
+  game.user.isGM = false;
+  mod.recordSale("P", "Item.w1");
+  await new Promise(r => setTimeout(r, 20));
+  const untouched = mod.getStores().find(s => s.id === "P").items[0].remaining;
+  check("T16 player emits instead of writing",
+    untouched === 2 && emitted.length === 1 && emitted[0][1]?.action === "buy",
+    `remaining=${untouched}, emits=${emitted.length}`);
+  game.user.isGM = true;
+  mod.recordSale("P", "Item.w1");
+  await new Promise(r => setTimeout(r, 20));
+  check("T16b GM writes directly",
+    mod.getStores().find(s => s.id === "P").items[0].remaining === 1);
+
+  // --- T17: stranded catalogue filters can be recovered
+  await game.settings.set(ID, "catalogueFilters",
+    { availability: { categoryEnabled: { weapon: false }, blockedItems: [], priceMin: 7, priceMax: 9 }, markup: 42 });
+  await game.settings.set(ID, "activeStore", "");
+  await mod.restoreCatalogue();
+  check("T17 stranded filters restored",
+    game.settings.get(CRW, "storeAvailability").priceMin === 7 &&
+    game.settings.get(CRW, "storeMarkup") === 42 &&
+    !game.settings.get(ID, "catalogueFilters")?.availability);
+
+  // --- T11: deleting the live store must still restore the catalogue.
+  // Self-contained: records the state going in, so it does not depend on
+  // whatever the tests above left behind.
+  const before = game.settings.get(CRW, "storeAvailability");
+  const beforeMarkup = game.settings.get(CRW, "storeMarkup");
+  await mod.saveStores([{ id: "Z", name: "Doomed", markup: 300, limited: false,
+    items: [{ uuid: "Item.w1", name: "W1", type: "weapon", price: 50, qty: 1, remaining: 1 }] }]);
+  await mod.activate("Z");
+  const blanked = game.settings.get(CRW, "storeAvailability").priceMin === 0;
+  await mod.queueWrite(async () => mod.saveStores(mod.getStores().filter(s => s.id !== "Z")));
+  await mod.activate("");                       // what the delete handler does
+  const after = game.settings.get(CRW, "storeAvailability");
   check("T11 delete-then-restore returns filters",
-    game.settings.get(CRW, "storeAvailability").priceMin === 50);
+    blanked &&
+    after.priceMin === before.priceMin && after.priceMax === before.priceMax &&
+    game.settings.get(CRW, "storeMarkup") === beforeMarkup,
+    `blanked=${blanked} before=${before.priceMin}/${before.priceMax} after=${after.priceMin}/${after.priceMax}`);
 
   let bad = 0;
   for (const r of results) { if (!r.pass) bad++; console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "  [" + r.detail + "]" : ""}`); }
