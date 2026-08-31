@@ -1,5 +1,5 @@
 const fs = require("fs");
-const src = fs.readFileSync(process.argv[2] ?? new URL("../main.js", "file://" + __filename).pathname, "utf8");
+const src = fs.readFileSync(process.argv[2] ?? require("path").join(__dirname, "..", "main.js"), "utf8");
 
 const CRW = "cyberpunk-red-wizards";
 const ID = "cprw-store-peek";
