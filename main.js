@@ -312,6 +312,8 @@ function injectBar(root) {
   bar.innerHTML =
     `<label style="opacity:.7;font-size:.85em;letter-spacing:.05em;">STORE</label>` +
     `<select class="cprw-select crw-input" style="flex:1;min-width:0;">${opts}</select>` +
+    `<button class="cprw-refresh" style="flex:0 0 auto;width:auto;" ` +
+    `title="Re-read this store's items from the compendium"><i class="fas fa-arrows-rotate"></i></button>` +
     `<button class="cprw-manage" style="flex:0 0 auto;width:auto;" title="Manage stores">` +
     `<i class="fas fa-sliders-h"></i></button>`;
 
@@ -324,6 +326,10 @@ function injectBar(root) {
     e.preventDefault();
     manage();
   });
+  bar.querySelector(".cprw-refresh").addEventListener("click", (e) => {
+    e.preventDefault();
+    refreshItems().catch(reportErr);
+  });
 }
 
 async function activate(id) {
@@ -331,6 +337,54 @@ async function activate(id) {
   const store = getStores().find((s) => s.id === id);
   if (store) await game.settings.set(CRW, "storeMarkup", store.markup);
   rerender();
+}
+
+/**
+ * Re-reads the roster from source. Item sheets are always live, since opening
+ * one fetches the document, so the only stale values are the name and price in
+ * the list: the host module caches its whole item list on the window instance
+ * and clears it only on close, so a fresh window is what forces the re-read.
+ */
+async function refreshItems() {
+  _pool = null;
+  const store = getActive();
+  const dropped = [];
+
+  if (store) {
+    const found = new Map();
+    for (const it of store.items) {
+      const doc = await fromUuid(it.uuid).catch(() => null);
+      if (doc) found.set(it.uuid, doc);
+      else dropped.push(it.name);
+    }
+    await mutateStore(store.id, (st) => {
+      st.items = st.items.filter((it) => {
+        const doc = found.get(it.uuid);
+        if (!doc) return false;
+        it.name = doc.name;
+        it.type = doc.type;
+        it.price = doc.system?.price?.market ?? it.price;
+        return true;
+      });
+    });
+  }
+
+  const app =
+    foundry.applications?.instances?.get("crw-store") ??
+    [...(foundry.applications?.instances?.values?.() ?? [])].find(
+      (w) => w?.constructor?.name === "StoreApp"
+    );
+  if (app) {
+    const Cls = app.constructor;
+    await app.close();
+    Cls.open();
+  }
+
+  ui.notifications.info(
+    dropped.length
+      ? `Refreshed. Dropped ${dropped.length} item(s) no longer in the compendium: ${dropped.join(", ")}.`
+      : "Refreshed from the compendium."
+  );
 }
 
 function rerender() {
