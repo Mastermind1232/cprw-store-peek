@@ -13,6 +13,7 @@
 
 const ID = "cprw-store-peek";
 const CRW = "cyberpunk-red-wizards";
+const SOCKET = `module.${ID}`;
 
 const ROW = ".crw-store-item";
 const NAME = ".crw-store-item-info";
@@ -44,8 +45,14 @@ Hooks.once("init", () => {
    * uuids contain dots and Foundry expands dotted keys in places.
    * [{ id, name, markup, limited, items: [{uuid,name,type,price,qty,remaining}] }]
    */
-  game.settings.register(ID, "stores", { scope: "world", config: false, type: Array, default: [] });
-  game.settings.register(ID, "activeStore", { scope: "world", config: false, type: String, default: "" });
+  game.settings.register(ID, "stores", {
+    scope: "world", config: false, type: Array, default: [],
+    onChange: () => rerender(),
+  });
+  game.settings.register(ID, "activeStore", {
+    scope: "world", config: false, type: String, default: "",
+    onChange: () => rerender(),
+  });
 });
 
 const getStores = () => game.settings.get(ID, "stores") ?? [];
@@ -218,13 +225,9 @@ function wireBuy(root, store) {
   root.querySelectorAll(BUY).forEach((btn) => {
     if (btn.dataset.cprwWired) return;
     btn.dataset.cprwWired = "1";
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       const uuid = btn.dataset.uuid;
-      if (!uuid) return;
-      await mutateStore(store.id, (s) => {
-        const it = s.items.find((i) => i.uuid === uuid);
-        if (it && it.remaining > 0) it.remaining -= 1;
-      });
+      if (uuid) recordSale(store.id, uuid);
     }, true); // capture, so the count lands before the host handles the purchase
   });
 }
@@ -584,6 +587,35 @@ async function picker(initial) {
 /*  Hook                                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Stock lives in a world setting, which only a GM may write. A player buying
+ * something therefore has to ask a GM's client to do the decrement for them.
+ */
+function recordSale(storeId, uuid) {
+  const decrement = (s) => {
+    const it = s.items.find((i) => i.uuid === uuid);
+    if (it && it.remaining > 0) it.remaining -= 1;
+  };
+  if (game.user.isGM) mutateStore(storeId, decrement).catch(reportErr);
+  else game.socket.emit(SOCKET, { action: "buy", storeId, uuid });
+}
+
+const reportErr = (err) => console.error(`${ID} | ${err?.message ?? err}`, err);
+
+Hooks.once("ready", () => {
+  game.socket.on(SOCKET, (data) => {
+    // Exactly one GM acts, otherwise every logged-in GM decrements the same sale.
+    const actingGM = game.users.find((u) => u.isGM && u.active);
+    if (actingGM?.id !== game.user.id) return;
+    if (data?.action !== "buy") return;
+    recordSale(data.storeId, data.uuid);
+  });
+
+  if (!game.users.some((u) => u.isGM && u.active) && !game.user.isGM) {
+    console.warn(`${ID} | no GM online, limited-supply counts will not decrement`);
+  }
+});
+
 Hooks.on("renderStoreApp", (app, element) => {
   const root = element instanceof HTMLElement ? element : element?.[0];
   if (!root) return;
@@ -595,8 +627,10 @@ Hooks.on("renderStoreApp", (app, element) => {
       applyStore(root, store);
       wireBuy(root, store);
       // Keep the store's markup in step if the GM adjusts it while it is live
-      const live = game.settings.get(CRW, "storeMarkup");
-      if (live !== store.markup) mutateStore(store.id, (s) => (s.markup = live));
+      if (game.user.isGM) {
+        const live = game.settings.get(CRW, "storeMarkup");
+        if (live !== store.markup) mutateStore(store.id, (s) => (s.markup = live));
+      }
     }
   } catch (err) {
     console.error(`${ID} | failed decorating the store`, err);
