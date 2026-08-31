@@ -60,13 +60,22 @@ const getActiveId = () => game.settings.get(ID, "activeStore") ?? "";
 const getActive = () => getStores().find((s) => s.id === getActiveId()) ?? null;
 const saveStores = (s) => game.settings.set(ID, "stores", s);
 
-async function mutateStore(id, fn) {
-  const stores = foundry.utils.deepClone(getStores());
-  const store = stores.find((s) => s.id === id);
-  if (!store) return null;
-  fn(store);
-  await saveStores(stores);
-  return store;
+/**
+ * All writes go through one chain. Two sales landing at once would otherwise
+ * both read the same starting state and the second would overwrite the first.
+ */
+let _writes = Promise.resolve();
+
+function mutateStore(id, fn) {
+  _writes = _writes.then(async () => {
+    const stores = foundry.utils.deepClone(getStores());
+    const store = stores.find((s) => s.id === id);
+    if (!store) return null;
+    fn(store);
+    await saveStores(stores);
+    return store;
+  }).catch(reportErr);
+  return _writes;
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,11 +214,18 @@ function applyStore(root, store) {
 
   // Hide category tabs this store carries nothing for
   const stockedTypes = new Set(store.items.map((i) => i.type));
+  let activeHidden = false;
+  let firstVisible = null;
   root.querySelectorAll(TAB).forEach((tab) => {
     const t = tab.dataset.tab;
     if (!t || t === "settings") return;
-    if (!stockedTypes.has(t)) tab.style.display = "none";
+    if (!stockedTypes.has(t)) {
+      tab.style.display = "none";
+      if (tab.classList.contains("crw-store-tab-active")) activeHidden = true;
+    } else if (!firstVisible) firstVisible = tab;
   });
+  // Landing on a category this store does not carry shows an empty shelf.
+  if (activeHidden && firstVisible) firstVisible.click();
 
 }
 
@@ -273,15 +289,42 @@ function stockTag(row, store, stocked, left) {
   });
 }
 
+/**
+ * Buying opens a confirmation dialog, and gifting is instant, so a click is not
+ * proof of a sale. A click only registers an intent; the intent is redeemed by
+ * the createItem hook when the item actually appears on the buyer.
+ * Keyed by actor and item name, queued so repeat buys of one item each count.
+ */
+const pending = new Map();
+const INTENT_TTL = 5 * 60 * 1000;
+
+function intendSale(root, store, uuid, name) {
+  const actorId = root.querySelector(".crw-store-actor-select")?.value;
+  if (!actorId || !name) return;
+
+  const now = Date.now();
+  for (const [k, queue] of pending) {
+    const kept = queue.filter((i) => now - i.at < INTENT_TTL);
+    if (kept.length) pending.set(k, kept);
+    else pending.delete(k);
+  }
+
+  const key = `${actorId}|${name}`;
+  if (!pending.has(key)) pending.set(key, []);
+  pending.get(key).push({ storeId: store.id, uuid, at: now });
+}
+
 function wireBuy(root, store) {
   if (!store?.limited) return;
-  root.querySelectorAll(BUY).forEach((btn) => {
+  // The gift button hands the item over for free, but it still leaves the shelf.
+  root.querySelectorAll(`${BUY}, .crw-store-btn-loot`).forEach((btn) => {
     if (btn.dataset.cprwWired) return;
     btn.dataset.cprwWired = "1";
     btn.addEventListener("click", () => {
       const uuid = btn.dataset.uuid;
-      if (uuid) recordSale(store.id, uuid);
-    }, true); // capture, so the count lands before the host handles the purchase
+      const name = btn.closest(ROW)?.querySelector(".crw-store-item-name")?.childNodes?.[0]?.textContent?.trim();
+      if (uuid && name) intendSale(root, store, uuid, name);
+    }, true);
   });
 }
 
@@ -728,6 +771,15 @@ function recordSale(storeId, uuid) {
 const reportErr = (err) => console.error(`${ID} | ${err?.message ?? err}`, err);
 
 Hooks.once("ready", () => {
+  Hooks.on("createItem", (item, options, userId) => {
+    if (userId !== game.user.id) return;      // only the client that bought reports it
+    if (!(item.parent instanceof Actor)) return;
+    const queue = pending.get(`${item.parent.id}|${item.name}`);
+    if (!queue?.length) return;
+    const intent = queue.shift();
+    recordSale(intent.storeId, intent.uuid);
+  });
+
   game.socket.on(SOCKET, (data) => {
     // Exactly one GM acts, otherwise every logged-in GM decrements the same sale.
     const actingGM = game.users.find((u) => u.isGM && u.active);
