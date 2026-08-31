@@ -15,6 +15,19 @@ const ID = "cprw-store-peek";
 const CRW = "cyberpunk-red-wizards";
 const SOCKET = `module.${ID}`;
 
+function reportErr(err) {
+  console.error(`${ID} |`, err);
+  ui.notifications?.error(`Shopfront: ${err?.message ?? err}. See the console (F12).`);
+}
+
+/**
+ * Wraps an async DOM handler. Without this a throw becomes an unhandled
+ * rejection: the click appears to do nothing at all and says nothing.
+ */
+const guard = (fn) => async (...args) => {
+  try { await fn(...args); } catch (err) { reportErr(err); }
+};
+
 const ROW = ".crw-store-item";
 const NAME = ".crw-store-item-info";
 const BUY = ".crw-store-btn-buy";
@@ -189,15 +202,15 @@ function wirePeek(root) {
     el.dataset.peekWired = "1";
     el.style.cursor = "pointer";
     el.title = "Open item sheet";
-    el.addEventListener("click", async (ev) => {
+    el.addEventListener("click", guard(async (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       const uuid = el.closest("[data-uuid]")?.dataset?.uuid;
       if (!uuid) return;
       const doc = await fromUuid(uuid).catch(() => null);
       if (!doc) return ui.notifications.warn("Could not find that item.");
-      try { doc.sheet.render(true); } catch (err) { reportErr(err); }
-    });
+      doc.sheet.render(true);
+    }));
   });
 }
 
@@ -251,13 +264,13 @@ function addIcons(root) {
     // Dimmed rows dim only the text block, so match it here.
     if (row.classList.contains("crw-store-unaffordable")) img.style.opacity = "0.4";
 
-    img.addEventListener("click", async (ev) => {
+    img.addEventListener("click", guard(async (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       const doc = await fromUuid(uuid).catch(() => null);
-      if (!doc) return;
-      try { doc.sheet.render(true); } catch (err) { reportErr(err); }
-    });
+      if (!doc) return ui.notifications.warn("Could not find that item.");
+      doc.sheet.render(true);
+    }));
 
     // The row is space-between, so the text block has to absorb the slack or
     // the icon and the buttons would drift apart.
@@ -585,9 +598,9 @@ function injectBar(root) {
 
   header.after(bar);
 
-  bar.querySelector(".cprw-select").addEventListener("change", async (e) => {
+  bar.querySelector(".cprw-select").addEventListener("change", guard(async (e) => {
     await activate(e.target.value);
-  });
+  }));
   bar.querySelector(".cprw-manage").addEventListener("click", (e) => {
     e.preventDefault();
     manage();
@@ -789,18 +802,18 @@ function manage() {
     default: "pick",
     render: (h) => {
       h[0].querySelectorAll(".cprw-rows [data-markup]").forEach((inp) => {
-        inp.addEventListener("change", async () => {
+        inp.addEventListener("change", guard(async () => {
           const id = inp.closest("tr").dataset.id;
           const v = Math.max(0, Number(inp.value) || 0);
           await mutateStore(id, (st) => (st.markup = v));
           // If this store is live, the displayed prices have to follow it.
           if (getActiveId() === id) await game.settings.set(CRW, "storeMarkup", v);
-        });
+        }));
       });
 
       h[0].querySelectorAll(".cprw-rows a").forEach((a) => {
         a.style.cssText = "cursor:pointer;margin-left:.4em";
-        a.addEventListener("click", async (ev) => {
+        a.addEventListener("click", guard(async (ev) => {
           ev.preventDefault();
           const id = a.closest("tr").dataset.id;
           const act = a.dataset.act;
@@ -833,7 +846,7 @@ function manage() {
           rerender();
           dlg?.close();
           manage();
-        });
+        }));
       });
     },
   }).render(true);
@@ -1087,8 +1100,6 @@ function recordSale(storeId, uuid) {
   if (game.user.isGM) mutateStore(storeId, decrement).catch(reportErr);
   else game.socket.emit(SOCKET, { action: "buy", storeId, uuid });
 }
-
-const reportErr = (err) => console.error(`${ID} | ${err?.message ?? err}`, err);
 
 Hooks.once("ready", () => {
   // A switch interrupted midway (browser closed, session dropped) can leave the
