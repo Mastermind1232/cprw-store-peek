@@ -189,15 +189,8 @@ function applyStore(root, store) {
         buy.classList.add("crw-store-btn-disabled");
         buy.textContent = "Sold out";
       }
-    } else if (!row.querySelector(".cprw-qty")) {
-      const sub = row.querySelector(".crw-store-item-subtype");
-      const tag = document.createElement("span");
-      tag.className = "cprw-qty";
-      tag.style.cssText = "margin-left:.5em;font-weight:bold;";
-      tag.textContent = `· ${left} in stock`;
-      if (sub) sub.appendChild(tag);
-      else row.querySelector(".crw-store-item-info")?.appendChild(tag);
     }
+    stockTag(row, store, stocked, left);
   });
 
   // Drop source headers left with nothing under them
@@ -218,6 +211,66 @@ function applyStore(root, store) {
     if (!stockedTypes.has(t)) tab.style.display = "none";
   });
 
+}
+
+/**
+ * Shows remaining stock. For the GM the number is editable in place: raising it
+ * above the current maximum also raises what Restock will refill to.
+ */
+function stockTag(row, store, stocked, left) {
+  if (row.querySelector(".cprw-qty")) return;
+  const host = row.querySelector(".crw-store-item-name") ?? row.querySelector(NAME);
+  if (!host) return;
+
+  const tag = document.createElement("span");
+  tag.className = "cprw-qty";
+  tag.style.cssText = "margin-left:.5em;font-size:.85em;opacity:.75;font-weight:normal;";
+  tag.textContent = left > 0 ? `x${left}` : "out";
+  host.appendChild(tag);
+  if (!game.user.isGM) return;
+
+  tag.style.cursor = "pointer";
+  tag.style.textDecoration = "underline dotted";
+  tag.title = "Click to set stock";
+
+  tag.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.value = String(left);
+    input.className = "crw-input";
+    input.style.cssText = "width:4.5em;margin-left:.5em;";
+    // The row's name block opens the item sheet; keep these clicks out of it.
+    ["click", "mousedown", "dblclick"].forEach((e) =>
+      input.addEventListener(e, (x) => x.stopPropagation()));
+
+    tag.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let settled = false;
+    const commit = () => {
+      if (settled) return;
+      settled = true;
+      const v = Math.max(0, Number(input.value) || 0);
+      if (v === left) return rerender();
+      mutateStore(store.id, (st) => {
+        const it = st.items.find((i) => i.uuid === stocked.uuid);
+        if (!it) return;
+        it.remaining = v;
+        if (v > (it.qty ?? 0)) it.qty = v;
+      }).catch(reportErr);
+    };
+
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      else if (e.key === "Escape") { settled = true; rerender(); }
+    });
+  });
 }
 
 function wireBuy(root, store) {
@@ -246,7 +299,7 @@ function injectBar(root) {
           const n = s.items.length;
           const supply = s.limited ? "limited" : "unlimited";
           const sel = s.id === activeId ? "selected" : "";
-          return `<option value="${s.id}" ${sel}>${s.name} (${n}, ${supply})</option>`;
+          return `<option value="${s.id}" ${sel}>${s.name} — ${n} items, ${supply}, ${s.markup}%</option>`;
         })
     )
     .join("");
@@ -307,7 +360,9 @@ function manage() {
           <td>${s.name}</td>
           <td style="text-align:center">${s.items.length}</td>
           <td style="text-align:center">${stock}</td>
-          <td style="text-align:center">${s.markup}%</td>
+          <td style="text-align:center">
+            <input type="number" data-markup min="0" value="${s.markup}" style="width:4.5em"/>%
+          </td>
           <td style="text-align:right;white-space:nowrap">
             <a data-act="edit" title="Edit contents"><i class="fas fa-pen-to-square"></i></a>
             <a data-act="restock" title="Restock"><i class="fas fa-rotate"></i></a>
@@ -318,7 +373,8 @@ function manage() {
       }).join("")
     : `<tr><td colspan="5" style="opacity:.6;text-align:center">No stores yet.</td></tr>`;
 
-  new Dialog({
+  let dlg;
+  dlg = new Dialog({
     title: "Manage Stores",
     content: `
       <table style="width:100%;font-size:.95em">
@@ -343,6 +399,16 @@ function manage() {
     },
     default: "pick",
     render: (h) => {
+      h[0].querySelectorAll(".cprw-rows [data-markup]").forEach((inp) => {
+        inp.addEventListener("change", async () => {
+          const id = inp.closest("tr").dataset.id;
+          const v = Math.max(0, Number(inp.value) || 0);
+          await mutateStore(id, (st) => (st.markup = v));
+          // If this store is live, the displayed prices have to follow it.
+          if (getActiveId() === id) await game.settings.set(CRW, "storeMarkup", v);
+        });
+      });
+
       h[0].querySelectorAll(".cprw-rows a").forEach((a) => {
         a.style.cssText = "cursor:pointer;margin-left:.4em";
         a.addEventListener("click", async (ev) => {
@@ -372,7 +438,7 @@ function manage() {
           }
 
           rerender();
-          Object.values(ui.windows).find((w) => w.title === "Manage Stores")?.close();
+          dlg?.close();
           manage();
         });
       });
