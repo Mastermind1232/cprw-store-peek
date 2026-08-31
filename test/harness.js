@@ -45,10 +45,19 @@ store.set(`${CRW}.storeExcludedPacks`, {});
 
 const mod = new Function(
   "Hooks", "game", "ui", "foundry", "document", "Dialog", "Actor", "fromUuid", "console",
-  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry };"
+  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor };"
 )(Hooks, game, ui, foundry, {}, class {}, class {}, async () => null, { log() {}, warn() {}, error() {}, debug() {} });
 
 hooks.init.forEach(f => f());
+
+// A small world-item catalogue for the reshuffle tests
+for (let i = 1; i <= 12; i++) {
+  game.items.push({
+    uuid: `Item.w${i}`, name: `Weapon ${i}`, type: "weapon",
+    system: { price: { market: i * 50 } },
+  });
+}
+game.items.push({ uuid: "Item.a1", name: "Vest", type: "armor", system: { price: { market: 100 } } });
 
 const results = [];
 const check = (name, pass, detail = "") => results.push({ name, pass, detail });
@@ -129,6 +138,67 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
   // --- T10: quote in a store name cannot break the dialog markup
   check("T10 name escaping", mod.esc('The "Fixer" <b>') === "The &quot;Fixer&quot; &lt;b&gt;",
     mod.esc('The "Fixer" <b>'));
+
+  // --- T12: a swap stays inside the store's criteria and never duplicates
+  await mod.saveStores([{
+    id: "C", name: "Rolled", markup: 100, limited: true,
+    criteria: { types: ["weapon"], min: 100, max: 300 },
+    items: [
+      { uuid: "Item.w2", name: "Weapon 2", type: "weapon", price: 100, qty: 2, remaining: 2 },
+      { uuid: "Item.w4", name: "Weapon 4", type: "weapon", price: 200, qty: 1, remaining: 1 },
+    ],
+  }]);
+  let swaps = new Set();
+  for (let n = 0; n < 30; n++) {
+    await mod.saveStores(mod.getStores().map(s => s.id === "C"
+      ? { ...s, items: [{ uuid: "Item.w2", name: "Weapon 2", type: "weapon", price: 100, qty: 2, remaining: 2 },
+                        { uuid: "Item.w4", name: "Weapon 4", type: "weapon", price: 200, qty: 1, remaining: 1 }] } : s));
+    await mod.reshuffleItem("C", "Item.w2");
+    const c = mod.getStores().find(s => s.id === "C");
+    const added = c.items.find(i => i.uuid !== "Item.w4");
+    swaps.add(added.uuid);
+    if (added.price < 100 || added.price > 300 || added.type !== "weapon" || added.uuid === "Item.w4") {
+      check("T12 swap respects criteria", false, `got ${added.uuid} @ ${added.price}`); break;
+    }
+    if (added.qty !== 2) { check("T12b swap keeps quantity", false, `qty=${added.qty}`); break; }
+  }
+  if (!results.some(r => r.name.startsWith("T12"))) {
+    check("T12 swap respects criteria and keeps quantity", true, `${swaps.size} distinct results`);
+  }
+
+  // --- T13: with no criteria, a swap stays near the item's own price
+  await mod.saveStores([{
+    id: "D", name: "Picked", markup: 100, limited: true,
+    items: [{ uuid: "Item.w6", name: "Weapon 6", type: "weapon", price: 300, qty: 1, remaining: 1 }],
+  }]);
+  const cr = mod.criteriaFor(mod.getStores()[0], mod.getStores()[0].items[0]);
+  check("T13 fallback band is the item's own type and price range",
+    cr.types.join() === "weapon" && cr.min === 150 && cr.max === 450, JSON.stringify(cr));
+
+  // --- T14: reshuffle all keeps the count and the quantities
+  await mod.saveStores([{
+    id: "E", name: "Roll2", markup: 100, limited: true,
+    criteria: { types: ["weapon"], min: 0, max: 0 },
+    items: [
+      { uuid: "Item.w1", name: "W1", type: "weapon", price: 50, qty: 3, remaining: 1 },
+      { uuid: "Item.w2", name: "W2", type: "weapon", price: 100, qty: 2, remaining: 2 },
+      { uuid: "Item.w3", name: "W3", type: "weapon", price: 150, qty: 1, remaining: 0 },
+    ],
+  }]);
+  await mod.reshuffleStore("E");
+  const e = mod.getStores().find(s => s.id === "E");
+  check("T14 reshuffle all keeps count and quantities",
+    e.items.length === 3 && e.items.map(i => i.qty).join() === "3,2,1" &&
+    e.items.every(i => i.type === "weapon") &&
+    new Set(e.items.map(i => i.uuid)).size === 3,
+    JSON.stringify(e.items.map(i => `${i.uuid}:${i.qty}`)));
+  check("T14b reshuffle refills stock", e.items.every(i => i.remaining === i.qty));
+
+  // --- T15: removing an item takes out only that one
+  await mod.dropItem("E", e.items[1].uuid);
+  const e2 = mod.getStores().find(s => s.id === "E");
+  check("T15 remove drops exactly one", e2.items.length === 2 &&
+    !e2.items.some(i => i.uuid === e.items[1].uuid));
 
   // --- T11: deleting the live store must restore the catalogue
   await mod.queueWrite(async () => mod.saveStores(mod.getStores().filter(s => s.id !== "A")));

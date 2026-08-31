@@ -421,6 +421,122 @@ function wireBuy(root, store) {
   });
 }
 
+/**
+ * Rolled and snapshotted stores remember what they were built from, so a
+ * reshuffle can draw a genuinely comparable replacement. Hand-picked stores
+ * have no such rule, so a swap stays in the item's own type and price band.
+ */
+function criteriaFor(store, item) {
+  const c = store.criteria;
+  if (c?.types?.length) {
+    return { types: c.types, min: c.min || 0, max: c.max || Infinity };
+  }
+  if (item) {
+    return {
+      types: [item.type],
+      min: Math.floor(item.price * 0.5),
+      max: Math.ceil(item.price * 1.5) || Infinity,
+    };
+  }
+  return {
+    types: [...new Set(store.items.map((i) => i.type))],
+    min: 0,
+    max: Infinity,
+  };
+}
+
+function drawFrom(all, { types, min, max }, exclude) {
+  return all.filter(
+    (i) => types.includes(i.type) && i.price >= min && i.price <= max && !exclude.has(i.uuid)
+  );
+}
+
+async function reshuffleItem(storeId, uuid) {
+  const store = getStores().find((s) => s.id === storeId);
+  const old = store?.items.find((i) => i.uuid === uuid);
+  if (!old) return;
+
+  const bag = drawFrom(await pool(), criteriaFor(store, old), new Set(store.items.map((i) => i.uuid)));
+  if (!bag.length) return ui.notifications.warn("Nothing else matches this store's criteria.");
+
+  const pick = bag[Math.floor(Math.random() * bag.length)];
+  await mutateStore(storeId, (st) => {
+    const idx = st.items.findIndex((i) => i.uuid === uuid);
+    if (idx >= 0) st.items[idx] = entry(pick, old.qty ?? 1);
+  });
+  ui.notifications.info(`${old.name} swapped for ${pick.name}.`);
+}
+
+async function reshuffleStore(storeId) {
+  const store = getStores().find((s) => s.id === storeId);
+  if (!store?.items.length) return;
+
+  const qtys = store.items.map((i) => i.qty ?? 1);
+  const bag = drawFrom(await pool(), criteriaFor(store, null), new Set());
+  if (!bag.length) return ui.notifications.warn("Nothing matches this store's criteria.");
+
+  const fresh = [];
+  for (let n = 0; n < qtys.length && bag.length; n++) {
+    const pick = bag.splice(Math.floor(Math.random() * bag.length), 1)[0];
+    fresh.push(entry(pick, qtys[n]));
+  }
+  await mutateStore(storeId, (st) => (st.items = fresh));
+  ui.notifications.info(`${store.name} reshuffled: ${fresh.length} new items.`);
+}
+
+async function dropItem(storeId, uuid) {
+  await mutateStore(storeId, (st) => {
+    st.items = st.items.filter((i) => i.uuid !== uuid);
+  });
+}
+
+/** Swap and remove, for the GM, on each row of a named store. */
+function addRowTools(root, store) {
+  if (!game.user.isGM) return;
+
+  root.querySelectorAll(ROW).forEach((row) => {
+    const actions = row.querySelector(".crw-store-item-actions");
+    const uuid = row.dataset.uuid;
+    if (!actions || !uuid || actions.querySelector(".cprw-drop")) return;
+
+    const make = (cls, icon, title, fn) => {
+      const b = document.createElement("button");
+      // Borrow the host's button styling so these sit correctly in the row.
+      b.className = `crw-store-btn-hide ${cls}`;
+      b.type = "button";
+      b.title = title;
+      b.innerHTML = `<i class="fas ${icon}"></i>`;
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        fn().catch(reportErr);
+      });
+      return b;
+    };
+
+    actions.append(
+      make("cprw-shuffle", "fa-shuffle", "Swap this for a different item",
+        () => reshuffleItem(store.id, uuid)),
+      make("cprw-drop", "fa-xmark", "Remove this item from this store",
+        () => dropItem(store.id, uuid))
+    );
+  });
+}
+
+/** One list instead of a block per compendium. */
+function mergeSections(root) {
+  const list = root.querySelector(".crw-store-items");
+  if (!list) return;
+  const rows = [...list.querySelectorAll(ROW)];
+  if (rows.length < 2) return;
+
+  list.querySelectorAll(DIVIDER).forEach((d) => d.remove());
+  const nameOf = (r) =>
+    r.querySelector(".crw-store-item-name")?.childNodes?.[0]?.textContent?.trim() ?? "";
+  rows.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  rows.forEach((r) => list.appendChild(r));
+}
+
 function injectBar(root) {
   if (!game.user.isGM || root.querySelector(".cprw-storebar")) return;
   const header = root.querySelector(HEADER);
@@ -623,6 +739,7 @@ function manage() {
           </td>
           <td style="text-align:right;white-space:nowrap">
             <a data-act="edit" title="Edit contents"><i class="fas fa-pen-to-square"></i></a>
+            <a data-act="reshuffle" title="Reshuffle every item"><i class="fas fa-shuffle"></i></a>
             <a data-act="restock" title="Restock"><i class="fas fa-rotate"></i></a>
             <a data-act="rename" title="Rename"><i class="fas fa-i-cursor"></i></a>
             <a data-act="supply" title="Toggle limited/unlimited"><i class="fas fa-infinity"></i></a>
@@ -689,6 +806,8 @@ function manage() {
             const n = await promptText("Rename store", store.name);
             if (!n) return;
             await mutateStore(id, (s) => (s.name = n));
+          } else if (act === "reshuffle") {
+            await reshuffleStore(id);
           } else if (act === "supply") {
             await mutateStore(id, (s) => (s.limited = !s.limited));
           } else if (act === "edit") {
@@ -744,11 +863,22 @@ async function _create(h, mode) {
   const limited = f.querySelector('[name="l"]').checked;
 
   let items = null;
+  let criteria = null;
+
   if (mode === "snap") {
     items = (await pool()).filter(currentFilter()).map((i) => entry(i, 1));
     if (!items.length) return ui.notifications.warn("Nothing passes the store's current filters.");
+    // Remember the shape of the snapshot so the store can be reshuffled later.
+    const a = catalogueAvailability();
+    criteria = {
+      types: Object.keys(TYPES).filter((t) => a.categoryEnabled?.[t] !== false),
+      min: a.priceMin || 0,
+      max: a.priceMax || 0,
+    };
   } else if (mode === "roll") {
-    items = await rollDialog();
+    const rolled = await rollDialog();
+    items = rolled?.items ?? null;
+    criteria = rolled?.criteria ?? null;
   } else {
     items = await picker([]);
   }
@@ -757,7 +887,7 @@ async function _create(h, mode) {
   }
   if (!items) return;
 
-  const store = { id: foundry.utils.randomID(12), name, markup, limited, items };
+  const store = { id: foundry.utils.randomID(12), name, markup, limited, items, criteria };
   await queueWrite(async () => saveStores([...getStores(), store]));
   await activate(store.id);
   ui.notifications.info(`"${name}" created with ${items.length} items.`);
@@ -808,7 +938,7 @@ async function rollDialog() {
               const pick = bag.splice(Math.floor(Math.random() * bag.length), 1)[0];
               out.push(entry(pick, 1 + Math.floor(Math.random() * maxQty)));
             }
-            resolve(out);
+            resolve({ items: out, criteria: { types, min, max: maxRaw > 0 ? maxRaw : 0 } });
           },
         },
         cancel: { label: "Cancel", callback: () => resolve(null) },
@@ -981,7 +1111,10 @@ Hooks.on("renderStoreApp", (app, element) => {
       }
     }
 
+    if (store) addRowTools(root, store);
+
     // Last, so rows the store filtered out are never decorated.
+    mergeSections(root);
     addIcons(root);
   } catch (err) {
     console.error(`${ID} | failed decorating the store`, err);
