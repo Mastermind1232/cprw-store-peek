@@ -71,17 +71,26 @@ const saveStores = (s) => game.settings.set(ID, "stores", s);
  */
 let _writes = Promise.resolve();
 
+function queueWrite(fn) {
+  _writes = _writes.then(fn).catch(reportErr);
+  return _writes;
+}
+
 function mutateStore(id, fn) {
-  _writes = _writes.then(async () => {
+  return queueWrite(async () => {
     const stores = foundry.utils.deepClone(getStores());
     const store = stores.find((s) => s.id === id);
     if (!store) return null;
     fn(store);
     await saveStores(stores);
     return store;
-  }).catch(reportErr);
-  return _writes;
+  });
 }
+
+/** Store names are GM-typed free text and get interpolated into dialog HTML. */
+const esc = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* ------------------------------------------------------------------ */
 /*  Item pool — borrowed from the host module so it always matches      */
@@ -359,7 +368,7 @@ function injectBar(root) {
           const n = s.items.length;
           const supply = s.limited ? "limited" : "unlimited";
           const sel = s.id === activeId ? "selected" : "";
-          return `<option value="${s.id}" ${sel}>${s.name} — ${n} items, ${supply}, ${s.markup}%</option>`;
+          return `<option value="${s.id}" ${sel}>${esc(s.name)} — ${n} items, ${supply}, ${s.markup}%</option>`;
         })
     )
     .join("");
@@ -392,25 +401,36 @@ function injectBar(root) {
   });
 }
 
+/** Set while a switch is in flight, so the markup write-back stays out of it. */
+let _switching = false;
+
 async function activate(id) {
-  const wasActive = getActiveId();
+  _switching = true;
+  try {
+    const wasActive = getActiveId();
 
-  // Park the catalogue's settings the first time we leave it.
-  if (id && !wasActive) {
-    await game.settings.set(ID, "catalogueFilters", {
-      availability: foundry.utils.deepClone(game.settings.get(CRW, "storeAvailability")),
-      markup: game.settings.get(CRW, "storeMarkup"),
-    });
-  }
+    // Park the catalogue's settings the first time we leave it.
+    if (id && !wasActive) {
+      await game.settings.set(ID, "catalogueFilters", {
+        availability: foundry.utils.deepClone(game.settings.get(CRW, "storeAvailability")),
+        markup: game.settings.get(CRW, "storeMarkup"),
+      });
+    }
 
-  await game.settings.set(ID, "activeStore", id);
+    // The host's settings are settled first. Announcing the new store before
+    // its markup had landed let the re-render read the old store's markup and
+    // write it onto the new one.
+    if (id) {
+      const store = getStores().find((s) => s.id === id);
+      if (store) await game.settings.set(CRW, "storeMarkup", store.markup);
+      await blankFilters();
+    } else {
+      await restoreCatalogue();
+    }
 
-  if (id) {
-    const store = getStores().find((s) => s.id === id);
-    if (store) await game.settings.set(CRW, "storeMarkup", store.markup);
-    await blankFilters();
-  } else {
-    await restoreCatalogue();
+    await game.settings.set(ID, "activeStore", id);
+  } finally {
+    _switching = false;
   }
   rerender();
 }
@@ -528,7 +548,7 @@ function manage() {
         const left = s.items.reduce((n, i) => n + (i.remaining ?? 0), 0);
         const stock = s.limited ? `${left} / ${total}` : "∞";
         return `<tr data-id="${s.id}">
-          <td>${s.name}</td>
+          <td>${esc(s.name)}</td>
           <td style="text-align:center">${s.items.length}</td>
           <td style="text-align:center">${stock}</td>
           <td style="text-align:center">
@@ -560,7 +580,7 @@ function manage() {
         <input type="number" name="m" value="100" style="width:80px"/>
         <label style="margin-left:1em"><input type="checkbox" name="l" checked/> Limited supply</label></div>
       <p style="opacity:.65;font-size:.9em">
-        <b>Snapshot</b> takes every item that passes the store's current category,
+        <b>Snapshot</b> takes every item that passes the full catalogue's category,
         price and hidden-item settings. <b>Roll</b> generates a random roster.
         <b>Pick</b> opens a chooser.</p>`,
     buttons: {
@@ -591,8 +611,10 @@ function manage() {
 
           if (act === "delete") {
             if (!(await confirmDelete(store.name))) return;
-            await saveStores(getStores().filter((s) => s.id !== id));
-            if (getActiveId() === id) await game.settings.set(ID, "activeStore", "");
+            const wasLive = getActiveId() === id;
+            await queueWrite(async () => saveStores(getStores().filter((s) => s.id !== id)));
+            // activate("") is what restores the parked catalogue filters.
+            if (wasLive) await activate("");
           } else if (act === "restock") {
             await mutateStore(id, (s) => s.items.forEach((i) => (i.remaining = i.qty)));
             ui.notifications.info(`${store.name} restocked.`);
@@ -620,7 +642,7 @@ function manage() {
 function confirmDelete(name) {
   return Dialog.confirm({
     title: "Delete store",
-    content: `<p>Delete <b>${name}</b>? This cannot be undone.</p>`,
+    content: `<p>Delete <b>${esc(name)}</b>? This cannot be undone.</p>`,
   });
 }
 
@@ -628,7 +650,7 @@ function promptText(title, initial = "") {
   return new Promise((resolve) => {
     new Dialog({
       title,
-      content: `<input type="text" name="v" value="${initial}" style="width:100%"/>`,
+      content: `<input type="text" name="v" value="${esc(initial)}" style="width:100%"/>`,
       buttons: {
         ok: { label: "OK", callback: (h) => resolve(h[0].querySelector('[name="v"]').value.trim()) },
         cancel: { label: "Cancel", callback: () => resolve(null) },
@@ -663,10 +685,13 @@ async function _create(h, mode) {
   } else {
     items = await picker([]);
   }
-  if (!items?.length) return;
+  if (items && !items.length) {
+    return ui.notifications.warn("No items chosen, so no store was created.");
+  }
+  if (!items) return;
 
   const store = { id: foundry.utils.randomID(12), name, markup, limited, items };
-  await saveStores([...getStores(), store]);
+  await queueWrite(async () => saveStores([...getStores(), store]));
   await activate(store.id);
   ui.notifications.info(`"${name}" created with ${items.length} items.`);
 }
@@ -879,16 +904,11 @@ Hooks.on("renderStoreApp", (app, element) => {
     if (title) title.textContent = store?.name ?? app.title ?? "Store";
 
     if (store) {
-      console.debug(`${ID} | store "${store.name}"`, {
-        limited: store.limited,
-        items: store.items.length,
-        remaining: store.items.slice(0, 3).map((i) => `${i.name}=${i.remaining}`),
-      });
       applyStore(root, store);
       wireBuy(root, store);
       lockFilterSettings(root, store);
       // Keep the store's markup in step if the GM adjusts it while it is live
-      if (game.user.isGM) {
+      if (game.user.isGM && !_switching) {
         const live = game.settings.get(CRW, "storeMarkup");
         if (live !== store.markup) mutateStore(store.id, (s) => (s.markup = live));
       }
