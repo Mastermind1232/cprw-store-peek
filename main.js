@@ -990,6 +990,9 @@ async function picker(initial) {
           const t = typeSel.value;
           const q = search.value.trim().toLowerCase();
           let list = all.filter((i) => (!t || i.type === t) && (!q || i.name.toLowerCase().includes(q)));
+          // Cheapest first, so the 150-row cap shows the affordable end rather
+          // than whatever order the compendiums happened to load in.
+          list.sort((a, b) => (a.price - b.price) || a.name.localeCompare(b.name));
           const total = list.length;
           list = list.slice(0, 150);
 
@@ -1001,7 +1004,7 @@ async function picker(initial) {
                  <span style="opacity:.5;font-size:.85em">${TYPES[i.type] ?? i.type}</span>
                  <span style="opacity:.6;width:5em;text-align:right">${i.price}eb</span>
                </div>`).join("") +
-            (total > 150 ? `<p style="opacity:.5;text-align:center">${total - 150} more, narrow the search</p>` : "") +
+            (total > 150 ? `<p style="opacity:.5;text-align:center">${total - 150} more above this price, narrow the search</p>` : "") +
             (total === 0 ? `<p style="opacity:.5;text-align:center">No matches</p>` : "");
 
           results.querySelectorAll("[data-add]").forEach((a) =>
