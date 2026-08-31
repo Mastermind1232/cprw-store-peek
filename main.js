@@ -49,6 +49,11 @@ Hooks.once("init", () => {
     scope: "world", config: false, type: Array, default: [],
     onChange: () => rerender(),
   });
+  // Where the full catalogue's own filters and markup are parked while a named
+  // store is open, so the store shows its roster and nothing else.
+  game.settings.register(ID, "catalogueFilters", {
+    scope: "world", config: false, type: Object, default: {},
+  });
   game.settings.register(ID, "activeStore", {
     scope: "world", config: false, type: String, default: "",
     onChange: () => rerender(),
@@ -143,8 +148,14 @@ async function pool() {
 }
 
 /** The store's own visibility rules, minus the transient search box. */
+function catalogueAvailability() {
+  const parked = game.settings.get(ID, "catalogueFilters");
+  if (getActiveId() && parked?.availability) return parked.availability;
+  return game.settings.get(CRW, "storeAvailability");
+}
+
 function currentFilter() {
-  const a = game.settings.get(CRW, "storeAvailability");
+  const a = catalogueAvailability();
   const blocked = new Set(a.blockedItems ?? []);
   return (item) => {
     if (a.categoryEnabled?.[item.type] === false) return false;
@@ -187,6 +198,12 @@ function applyStore(root, store) {
   root.querySelectorAll(ROW).forEach((row) => {
     const stocked = byUuid.get(row.dataset.uuid);
     if (!stocked) return row.remove();
+
+    // The eye button writes to a single global blocklist, so inside a named
+    // store it would hide the item everywhere. Removing it from the roster is
+    // the right move instead. Left alone in the full catalogue view.
+    row.querySelector(".crw-store-btn-hide")?.remove();
+
     if (!store.limited) return;
 
     const left = stocked.remaining ?? 0;
@@ -376,10 +393,67 @@ function injectBar(root) {
 }
 
 async function activate(id) {
+  const wasActive = getActiveId();
+
+  // Park the catalogue's settings the first time we leave it.
+  if (id && !wasActive) {
+    await game.settings.set(ID, "catalogueFilters", {
+      availability: foundry.utils.deepClone(game.settings.get(CRW, "storeAvailability")),
+      markup: game.settings.get(CRW, "storeMarkup"),
+    });
+  }
+
   await game.settings.set(ID, "activeStore", id);
-  const store = getStores().find((s) => s.id === id);
-  if (store) await game.settings.set(CRW, "storeMarkup", store.markup);
+
+  if (id) {
+    const store = getStores().find((s) => s.id === id);
+    if (store) await game.settings.set(CRW, "storeMarkup", store.markup);
+    await blankFilters();
+  } else {
+    await restoreCatalogue();
+  }
   rerender();
+}
+
+/** A named store's roster is the whole filter, so nothing else may narrow it. */
+async function blankFilters() {
+  const a = foundry.utils.deepClone(game.settings.get(CRW, "storeAvailability"));
+  a.categoryEnabled ??= {};
+  for (const k of Object.keys(TYPES)) a.categoryEnabled[k] = true;
+  for (const k of Object.keys(a.categoryEnabled)) a.categoryEnabled[k] = true;
+  a.blockedItems = [];
+  a.priceMin = 0;
+  a.priceMax = 0;
+  await game.settings.set(CRW, "storeAvailability", a);
+}
+
+async function restoreCatalogue() {
+  const parked = game.settings.get(ID, "catalogueFilters");
+  if (!parked?.availability) return;
+  await game.settings.set(CRW, "storeAvailability", foundry.utils.deepClone(parked.availability));
+  if (typeof parked.markup === "number") await game.settings.set(CRW, "storeMarkup", parked.markup);
+  await game.settings.set(ID, "catalogueFilters", {});
+}
+
+/** Those filters are parked, so editing them here would only be overwritten. */
+function lockFilterSettings(root, store) {
+  if (!store) return;
+  for (const sec of root.querySelectorAll(".crw-store-settings-section")) {
+    const isFilter =
+      sec.querySelector(".crw-store-price-range") ||
+      sec.querySelector(".crw-store-category-grid") ||
+      sec.querySelector('[data-action="restoreAllItems"]') ||
+      sec.querySelector(".crw-store-hidden-list");
+    if (!isFilter || sec.querySelector(".cprw-locked")) continue;
+
+    sec.style.opacity = "0.4";
+    sec.style.pointerEvents = "none";
+    const note = document.createElement("p");
+    note.className = "cprw-locked crw-store-hint";
+    note.style.cssText = "font-style:italic;pointer-events:none;";
+    note.textContent = `Paused while "${store.name}" is open. It shows its own item list. Switch to Full catalogue to change these.`;
+    sec.prepend(note);
+  }
 }
 
 /**
@@ -812,6 +886,7 @@ Hooks.on("renderStoreApp", (app, element) => {
       });
       applyStore(root, store);
       wireBuy(root, store);
+      lockFilterSettings(root, store);
       // Keep the store's markup in step if the GM adjusts it while it is live
       if (game.user.isGM) {
         const live = game.settings.get(CRW, "storeMarkup");
