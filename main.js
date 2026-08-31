@@ -13,7 +13,6 @@
 
 const ID = "cprw-store-peek";
 const CRW = "cyberpunk-red-wizards";
-const LOADER = `/modules/${CRW}/scripts/app/store-loader.js`;
 
 const ROW = ".crw-store-item";
 const NAME = ".crw-store-item-info";
@@ -69,11 +68,62 @@ async function mutateStore(id, fn) {
 
 let _pool = null;
 
+const STORE_TYPES = new Set(Object.keys(TYPES));
+
+/** Mirrors the host module's classifyPackSource. null means never purchasable. */
+function packSource(id) {
+  if (id.startsWith("cyberpunk-red-core.internal_")) return null;
+  if (id.startsWith("cyberpunk-red-core.other_")) return null;
+  if (id.startsWith("cyberpunk-red-core.core_")) return "core";
+  if (id.startsWith("cyberpunk-red-core.black-chrome_")) return "blackChrome";
+  return "dlc";
+}
+
+/** Mirrors the host module's isPackExcluded. */
+function packExcluded(id, excluded) {
+  if (excluded[id]) return true;
+  if (id.startsWith("cyberpunk-red-core.core_") && excluded["group:core"]) return true;
+  if (id.startsWith("cyberpunk-red-core.black-chrome_") && excluded["group:blackChrome"]) return true;
+  return false;
+}
+
+const lite = (d) => ({
+  uuid: d.uuid,
+  name: d.name,
+  type: d.type,
+  price: d.system?.price?.market ?? 0,
+});
+
+/**
+ * The purchasable universe. Deliberately reimplemented rather than imported
+ * from the host module: on The Forge, modules are served from a versioned CDN
+ * path, so a hardcoded /modules/... import does not resolve.
+ */
 async function pool() {
   if (_pool) return _pool;
-  const { loadStoreItems } = await import(LOADER);
-  _pool = await loadStoreItems();
-  return _pool;
+  ui.notifications.info("Building item list, this takes a moment...");
+
+  const excluded = game.settings.get(CRW, "storeExcludedPacks") ?? {};
+  const out = [];
+
+  for (const pack of game.packs) {
+    if (pack.metadata.type !== "Item") continue;
+    if (packSource(pack.metadata.id) === null) continue;
+    if (packExcluded(pack.metadata.id, excluded)) continue;
+    let docs;
+    try {
+      docs = await pack.getDocuments();
+    } catch (e) {
+      console.warn(`${ID} | could not read pack ${pack.metadata.id}`, e);
+      continue;
+    }
+    for (const d of docs) if (STORE_TYPES.has(d.type)) out.push(lite(d));
+  }
+
+  for (const d of game.items) if (STORE_TYPES.has(d.type)) out.push(lite(d));
+
+  _pool = out;
+  return out;
 }
 
 /** The store's own visibility rules, minus the transient search box. */
@@ -345,6 +395,15 @@ function promptText(title, initial = "") {
 }
 
 async function create(h, mode) {
+  try {
+    await _create(h, mode);
+  } catch (err) {
+    console.error(`${ID} | store creation failed`, err);
+    ui.notifications.error(`Store creation failed: ${err.message}. See the console (F12).`);
+  }
+}
+
+async function _create(h, mode) {
   const f = h[0];
   const name = f.querySelector('[name="n"]').value.trim() || "New Store";
   const markup = Number(f.querySelector('[name="m"]').value) || 100;
