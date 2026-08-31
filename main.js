@@ -190,11 +190,13 @@ function applyStore(root, store) {
         buy.textContent = "Sold out";
       }
     } else if (!row.querySelector(".cprw-qty")) {
+      const sub = row.querySelector(".crw-store-item-subtype");
       const tag = document.createElement("span");
       tag.className = "cprw-qty";
-      tag.style.cssText = "opacity:.55;margin-left:.5em;font-size:.85em;";
-      tag.textContent = `x${left}`;
-      row.querySelector(".crw-store-item-name")?.appendChild(tag);
+      tag.style.cssText = "margin-left:.5em;font-weight:bold;";
+      tag.textContent = `· ${left} in stock`;
+      if (sub) sub.appendChild(tag);
+      else row.querySelector(".crw-store-item-info")?.appendChild(tag);
     }
   });
 
@@ -216,8 +218,6 @@ function applyStore(root, store) {
     if (!stockedTypes.has(t)) tab.style.display = "none";
   });
 
-  const title = root.querySelector(".window-title");
-  if (title) title.textContent = store.name;
 }
 
 function wireBuy(root, store) {
@@ -281,8 +281,13 @@ async function activate(id) {
 }
 
 function rerender() {
-  for (const w of Object.values(ui.windows)) {
-    if (w.constructor?.name === "StoreApp") w.render(true);
+  // StoreApp is an ApplicationV2, so it never appears in ui.windows.
+  const open = [
+    ...Object.values(ui.windows ?? {}),
+    ...(foundry.applications?.instances?.values?.() ?? []),
+  ];
+  for (const w of open) {
+    if (w?.constructor?.name === "StoreApp") w.render(true);
   }
 }
 
@@ -623,7 +628,16 @@ Hooks.on("renderStoreApp", (app, element) => {
     const store = getActive();
     wirePeek(root);
     injectBar(root);
+
+    const title = root.querySelector(".window-title");
+    if (title) title.textContent = store?.name ?? app.title ?? "Store";
+
     if (store) {
+      console.debug(`${ID} | store "${store.name}"`, {
+        limited: store.limited,
+        items: store.items.length,
+        remaining: store.items.slice(0, 3).map((i) => `${i.name}=${i.remaining}`),
+      });
       applyStore(root, store);
       wireBuy(root, store);
       // Keep the store's markup in step if the GM adjusts it while it is live
