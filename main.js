@@ -996,16 +996,22 @@ async function picker(initial) {
           const total = list.length;
           list = list.slice(0, 150);
 
+          const keep = results.scrollTop;
           results.innerHTML =
-            list.map((i) =>
-              `<div style="display:flex;align-items:center;gap:.5em;padding:.15em 0">
+            list.map((i) => {
+              const held = chosen.get(i.uuid)?.qty ?? 0;
+              return `<div style="display:flex;align-items:center;gap:.5em;padding:.15em 0${
+                held ? ";font-weight:bold" : ""}">
                  <a data-add="${i.uuid}" style="cursor:pointer"><i class="fas fa-plus"></i></a>
-                 <span style="flex:1">${i.name}</span>
+                 <span style="flex:1">${i.name}${
+                   held ? ` <span style="opacity:.7">(x${held} in store)</span>` : ""}</span>
                  <span style="opacity:.5;font-size:.85em">${TYPES[i.type] ?? i.type}</span>
                  <span style="opacity:.6;width:5em;text-align:right">${i.price}eb</span>
-               </div>`).join("") +
+               </div>`;
+            }).join("") +
             (total > 150 ? `<p style="opacity:.5;text-align:center">${total - 150} more above this price, narrow the search</p>` : "") +
             (total === 0 ? `<p style="opacity:.5;text-align:center">No matches</p>` : "");
+          results.scrollTop = keep;
 
           results.querySelectorAll("[data-add]").forEach((a) =>
             a.addEventListener("click", () => {
@@ -1019,6 +1025,7 @@ async function picker(initial) {
 
         function drawChosen() {
           counter.textContent = chosen.size;
+          drawResults();
           const list = [...chosen.values()].sort((a, b) => a.name.localeCompare(b.name));
           chosenBox.innerHTML = list.length
             ? list.map((i) =>
@@ -1037,12 +1044,12 @@ async function picker(initial) {
               const it = chosen.get(inp.dataset.qty);
               it.qty = Math.max(1, Number(inp.value) || 1);
               it.remaining = it.qty;
+              drawResults();   // keep the "(xN in store)" counts honest
             }));
         }
 
         typeSel.addEventListener("change", drawResults);
         search.addEventListener("input", drawResults);
-        drawResults();
         drawChosen();
       },
     }, { width: 520 });
