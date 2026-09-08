@@ -59,6 +59,10 @@ for (let i = 1; i <= 12; i++) {
   });
 }
 game.items.push({ uuid: "Item.a1", name: "Vest", type: "armor", system: { price: { market: 100 } } });
+// Bandmates: more Premium weapons (51-100), plus one whose system category outranks its price
+game.items.push({ uuid: "Item.p1", name: "Premium 1", type: "weapon", system: { price: { market: 60 } } });
+game.items.push({ uuid: "Item.p2", name: "Premium 2", type: "weapon", system: { price: { market: 80 } } });
+game.items.push({ uuid: "Item.x1", name: "Odd One", type: "weapon", system: { price: { market: 100, category: "expensive" } } });
 
 const results = [];
 const check = (name, pass, detail = "") => results.push({ name, pass, detail });
@@ -140,7 +144,7 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
   check("T10 name escaping", mod.esc('The "Fixer" <b>') === "The &quot;Fixer&quot; &lt;b&gt;",
     mod.esc('The "Fixer" <b>'));
 
-  // --- T12: a swap stays inside the store's criteria and never duplicates
+  // --- T12: a swap stays inside the item's own price band, whatever the store's criteria say
   await mod.saveStores([{
     id: "C", name: "Rolled", markup: 100, limited: true,
     criteria: { types: ["weapon"], min: 100, max: 300 },
@@ -158,23 +162,30 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     const c = mod.getStores().find(s => s.id === "C");
     const added = c.items.find(i => i.uuid !== "Item.w4");
     swaps.add(added.uuid);
-    if (added.price < 100 || added.price > 300 || added.type !== "weapon" || added.uuid === "Item.w4") {
-      check("T12 swap respects criteria", false, `got ${added.uuid} @ ${added.price}`); break;
+    if (added.band !== "premium" || added.price < 51 || added.price > 100 || added.type !== "weapon" ||
+        added.uuid === "Item.w4" || added.uuid === "Item.w2" || added.uuid === "Item.x1") {
+      check("T12 swap stays in the item's band", false, `got ${added.uuid} @ ${added.price} (${added.band})`); break;
     }
     if (added.qty !== 2) { check("T12b swap keeps quantity", false, `qty=${added.qty}`); break; }
   }
   if (!results.some(r => r.name.startsWith("T12"))) {
-    check("T12 swap respects criteria and keeps quantity", true, `${swaps.size} distinct results`);
+    check("T12 swap stays in the item's band and keeps quantity", true, `${swaps.size} distinct results`);
   }
 
-  // --- T13: with no criteria, a swap stays near the item's own price
+  // --- T13: a swap's criteria are the item's own type and exact band, even for old rows with no band
   await mod.saveStores([{
     id: "D", name: "Picked", markup: 100, limited: true,
     items: [{ uuid: "Item.w6", name: "Weapon 6", type: "weapon", price: 300, qty: 1, remaining: 1 }],
   }]);
   const cr = mod.criteriaFor(mod.getStores()[0], mod.getStores()[0].items[0]);
-  check("T13 fallback band is the item's own type and price range",
-    cr.types.join() === "weapon" && cr.min === 150 && cr.max === 450, JSON.stringify(cr));
+  check("T13 swap criteria are the item's type and exact band",
+    cr.types.join() === "weapon" && cr.band === "expensive" && cr.min === undefined, JSON.stringify(cr));
+  // T13b: the system's own category wins over the ladder; a store-wide reshuffle still uses the store's criteria
+  const odd = mod.entry({ uuid: "Item.x1", name: "Odd One", type: "weapon", price: 100, band: "expensive" }, 1);
+  const crStore = mod.criteriaFor({ criteria: { types: ["weapon"], min: 100, max: 300 }, items: [] }, null);
+  check("T13b category beats ladder; store reshuffle keeps store criteria",
+    odd.band === "expensive" && crStore.band === undefined && crStore.min === 100 && crStore.max === 300,
+    JSON.stringify({ odd: odd.band, crStore }));
 
   // --- T14: reshuffle all keeps the count and the quantities
   await mod.saveStores([{

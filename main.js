@@ -130,11 +130,28 @@ function packExcluded(id, excluded) {
   return false;
 }
 
+/**
+ * The book's price ladder. Every item carries a band: the system's own price
+ * category when it has one, otherwise the band its base price falls in. A
+ * swap only ever draws from the same band as the item it replaces.
+ */
+const BANDS = [
+  ["free", 0], ["dirtCheap", 9], ["cheap", 10], ["everyday", 20], ["costly", 50],
+  ["premium", 100], ["expensive", 500], ["veryExpensive", 1000], ["luxury", 5000],
+];
+function bandFor(price) {
+  const n = Number(price) || 0;
+  for (const [name, max] of BANDS) if (n <= max) return name;
+  return "superLuxury";
+}
+const bandOf = (i) => i.band || bandFor(i.price);
+
 const lite = (d) => ({
   uuid: d.uuid,
   name: d.name,
   type: d.type,
   price: d.system?.price?.market ?? 0,
+  band: d.system?.price?.category || bandFor(d.system?.price?.market ?? 0),
 });
 
 /**
@@ -189,7 +206,7 @@ function currentFilter() {
 }
 
 const entry = (i, qty = 1) => ({
-  uuid: i.uuid, name: i.name, type: i.type, price: i.price, qty, remaining: qty,
+  uuid: i.uuid, name: i.name, type: i.type, price: i.price, band: bandOf(i), qty, remaining: qty,
 });
 
 /* ------------------------------------------------------------------ */
@@ -449,21 +466,16 @@ function wireBuy(root, store) {
 }
 
 /**
- * Rolled and snapshotted stores remember what they were built from, so a
- * reshuffle can draw a genuinely comparable replacement. Hand-picked stores
- * have no such rule, so a swap stays in the item's own type and price band.
+ * Swapping one item draws only from that item's own type and price band, no
+ * matter how the store was built: a Premium weapon comes back as a Premium
+ * weapon. Reshuffling a whole store uses what the store was built from, and
+ * a hand-picked store falls back to the types it already carries.
  */
 function criteriaFor(store, item) {
+  if (item) return { types: [item.type], band: bandOf(item) };
   const c = store.criteria;
   if (c?.types?.length) {
     return { types: c.types, min: c.min || 0, max: c.max || Infinity };
-  }
-  if (item) {
-    return {
-      types: [item.type],
-      min: Math.floor(item.price * 0.5),
-      max: Math.ceil(item.price * 1.5) || Infinity,
-    };
   }
   return {
     types: [...new Set(store.items.map((i) => i.type))],
@@ -472,10 +484,12 @@ function criteriaFor(store, item) {
   };
 }
 
-function drawFrom(all, { types, min, max }, exclude) {
-  return all.filter(
-    (i) => types.includes(i.type) && i.price >= min && i.price <= max && !exclude.has(i.uuid)
-  );
+function drawFrom(all, { types, band, min = 0, max = Infinity }, exclude) {
+  return all.filter((i) => {
+    if (!types.includes(i.type) || exclude.has(i.uuid)) return false;
+    if (band) return bandOf(i) === band;
+    return i.price >= min && i.price <= max;
+  });
 }
 
 async function reshuffleItem(storeId, uuid) {
@@ -484,7 +498,7 @@ async function reshuffleItem(storeId, uuid) {
   if (!old) return;
 
   const bag = drawFrom(await pool(), criteriaFor(store, old), new Set(store.items.map((i) => i.uuid)));
-  if (!bag.length) return ui.notifications.warn("Nothing else matches this store's criteria.");
+  if (!bag.length) return ui.notifications.warn(`Nothing else in the ${bandOf(old)} band to swap ${old.name} for.`);
 
   const pick = bag[Math.floor(Math.random() * bag.length)];
   await mutateStore(storeId, (st) => {
@@ -711,6 +725,7 @@ async function refreshItems() {
         it.name = doc.name;
         it.type = doc.type;
         it.price = doc.system?.price?.market ?? it.price;
+        it.band = doc.system?.price?.category || bandFor(it.price);
         return true;
       });
     });
