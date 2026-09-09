@@ -6,7 +6,8 @@
  *
  *   - Click an item's name to open its sheet
  *   - Named stores: a saved roster of specific items, each with a quantity
- *   - Build one by hand-picking, snapshotting the current filters, or rolling
+ *   - Build one by hand-picking, snapshotting the current filters, rolling,
+ *     or rolling a Night Market on the core rulebook's tables
  *   - Limited or Unlimited supply, with Restock
  *   - The GM picks which store is live; players see its name and its stock
  */
@@ -152,6 +153,11 @@ const lite = (d) => ({
   type: d.type,
   price: d.system?.price?.market ?? 0,
   band: d.system?.price?.category || bandFor(d.system?.price?.market ?? 0),
+  // Optional hints, read defensively: the system's subtype, style or quality
+  // fields when they exist. The Night Market matcher falls back to names.
+  sub: String(d.system?.weaponType ?? d.system?.type ?? d.system?.style ?? "").toLowerCase(),
+  quality: String(d.system?.quality ?? "").toLowerCase(),
+  foundational: d.system?.isFoundational === true,
 });
 
 /**
@@ -808,11 +814,12 @@ function manage() {
       <p style="opacity:.65;font-size:.9em">
         <b>Snapshot</b> takes every item that passes the full catalogue's category,
         price and hidden-item settings. <b>Roll</b> generates a random roster.
-        <b>Pick</b> opens a chooser.</p>`,
+        <b>Pick</b> opens a chooser. <b>Night Market</b> rolls one on the book's tables.</p>`,
     buttons: {
       pick: { icon: '<i class="fas fa-hand-pointer"></i>', label: "Pick", callback: (h) => create(h, "pick") },
       snap: { icon: '<i class="fas fa-camera"></i>', label: "Snapshot", callback: (h) => create(h, "snap") },
       roll: { icon: '<i class="fas fa-dice"></i>', label: "Roll", callback: (h) => create(h, "roll") },
+      market: { icon: '<i class="fas fa-store"></i>', label: "Night Market", callback: (h) => create(h, "market") },
     },
     default: "pick",
     render: (h) => {
@@ -921,6 +928,11 @@ async function _create(h, mode) {
     const rolled = await rollDialog();
     items = rolled?.items ?? null;
     criteria = rolled?.criteria ?? null;
+  } else if (mode === "market") {
+    const m = await marketDialog();
+    items = m?.items ?? null;
+    criteria = m?.criteria ?? null;
+    if (m?.blanks?.length) showBlanks(m.blanks);
   } else {
     items = await picker([]);
   }
@@ -989,6 +1001,290 @@ async function rollDialog() {
       close: () => resolve(null),
     }).render(true);
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Night Market generator (core rulebook tables)                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The six markets, d6 in book order. Each row is a d100 band and a spec that
+ * turns the book's wording into a search of the pool. Specs:
+ *   t: item type(s) the store can show   n: name regex   p: price {eq|max|min}
+ *   sub: subtype/style keyword (matched against the hint field or the name)
+ *   found: foundational cyberware that must come along (book rule)
+ *   gm: true when the book says "GM's choice"; the row is listed for the GM
+ * A row can carry several specs (any of them may match).
+ */
+const NM_STEPS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
+const NM_CATS = {
+  1: { label: "Food and Drugs", rows: [
+    { label: "Canned Goods", t: "gear", n: /canned/i },
+    { label: "Packaged Goods", t: "gear", n: /packaged/i },
+    { label: "Frozen Goods", t: "gear", n: /frozen/i },
+    { label: "Bags of Grain", t: "gear", n: /grain/i },
+    { label: "Kibble Pack", t: "gear", n: /kibble/i },
+    { label: "Bags of Prepak", t: "gear", n: /prepak/i },
+    { label: "Street Drugs of 20eb or less", t: "gear", n: /drug/i, p: { max: 20 }, gm: true },
+    { label: "Poor Quality Alcohol", t: "gear", n: /alcohol/i, p: { eq: 10 } },
+    { label: "Alcohol", t: "gear", n: /alcohol/i, p: { eq: 20 } },
+    { label: "Excellent Quality Alcohol", t: "gear", n: /alcohol/i, p: { eq: 100 } },
+    { label: "MRE", t: "gear", n: /\bMRE\b/i },
+    { label: "Live Chicken", t: "gear", n: /chicken/i },
+    { label: "Live Fish", t: "gear", n: /\bfish/i },
+    { label: "Fresh Fruits", t: "gear", n: /fruit/i, p: { eq: 50 } },
+    { label: "Fresh Vegetables", t: "gear", n: /vegetable/i, p: { eq: 50 } },
+    { label: "Root Vegetables", t: "gear", n: /root vegetable/i },
+    { label: "Live Pigs", t: "gear", n: /\bpig/i },
+    { label: "Exotic Fruits", t: "gear", n: /fruit/i, p: { eq: 100 } },
+    { label: "Exotic Vegetables", t: "gear", n: /vegetable/i, p: { eq: 100 } },
+    { label: "Street Drugs of exactly 50eb", t: "gear", n: /drug/i, p: { eq: 50 }, gm: true },
+  ] },
+  2: { label: "Personal Electronics", rows: [
+    { label: "Agent", t: "gear", n: /^agent\b/i },
+    { label: "Programs or Hardware of 100eb or less", t: ["program", "itemUpgrade"], p: { max: 100 }, sample: 4 },
+    { label: "Audio Recorder", t: "gear", n: /audio recorder/i },
+    { label: "Bug Detector", t: "gear", n: /bug detector/i },
+    { label: "Chemical Analyzer", t: "gear", n: /chemical analy/i },
+    { label: "Computer", t: "gear", n: /^computer/i },
+    { label: "Cyberdeck", t: ["gear", "cyberdeck"], n: /cyberdeck/i, gm: true },
+    { label: "Disposable Cell Phone", t: "gear", n: /disposable cell/i },
+    { label: "Electric Guitar or Other Instrument", t: "gear", n: /guitar|instrument/i },
+    { label: "Programs or Hardware of exactly 500eb", t: ["program", "itemUpgrade"], p: { eq: 500 }, sample: 4 },
+    { label: "Medscanner", t: "gear", n: /medscanner/i },
+    { label: "Homing Tracer", t: "gear", n: /homing tracer/i },
+    { label: "Radio Communicator", t: "gear", n: /radio communicator/i },
+    { label: "Techscanner", t: "gear", n: /techscanner/i },
+    { label: "Smart Glasses", t: "gear", n: /smart glasses/i },
+    { label: "Radar Detector", t: "gear", n: /radar detector/i },
+    { label: "Scrambler/Descrambler", t: "gear", n: /scrambler/i },
+    { label: "Radio Scanner/Music Player", t: "gear", n: /radio scanner|music player/i },
+    { label: "Braindance Viewer", t: "gear", n: /braindance viewer/i },
+    { label: "Virtuality Goggles", t: "gear", n: /virtuality goggles/i },
+  ] },
+  3: { label: "Weapons and Armor", rows: [
+    { label: "Medium Pistol", t: "weapon", n: /medium pistol/i },
+    { label: "Heavy Pistol or Very Heavy Pistol", t: "weapon", n: /heavy pistol/i },
+    { label: "SMG", t: "weapon", n: /^smg\b|(?<!heavy )\bsmg\b/i },
+    { label: "Heavy SMG", t: "weapon", n: /heavy smg/i },
+    { label: "Shotgun", t: "weapon", n: /shotgun/i },
+    { label: "Assault Rifle", t: "weapon", n: /assault rifle/i },
+    { label: "Sniper Rifle", t: "weapon", n: /sniper rifle/i },
+    { label: "Bows or Crossbow", t: "weapon", n: /\bbow\b|crossbow/i },
+    { label: "Grenade Launcher or Rocket Launcher", t: "weapon", n: /grenade launcher|rocket launcher/i },
+    { label: "Ammunition of 500eb or less", t: "ammo", p: { max: 500 }, sample: 4 },
+    { label: "A Single Exotic Weapon of GM's choice", t: "weapon", n: /exotic/i, gm: true },
+    { label: "Light Melee Weapon", t: "weapon", n: /light melee/i },
+    { label: "Medium Melee Weapon", t: "weapon", n: /medium melee/i },
+    { label: "Heavy Melee Weapon", t: "weapon", n: /(?<!very )heavy melee/i },
+    { label: "Very Heavy Melee Weapon", t: "weapon", n: /very heavy melee/i },
+    { label: "Armor of 100eb or less", t: "armor", p: { max: 100 }, sample: 4 },
+    { label: "Armor of exactly 500eb", t: "armor", p: { eq: 500 }, sample: 4 },
+    { label: "Armor of exactly 1,000eb", t: "armor", p: { eq: 1000 }, sample: 4 },
+    { label: "Weapon Attachments of 100eb or less", t: "itemUpgrade", p: { max: 100 }, sample: 4 },
+    { label: "Weapon Attachments of 500eb or higher", t: "itemUpgrade", p: { min: 500 }, sample: 4 },
+  ] },
+  4: { label: "Cyberware", rows: [
+    { label: "Cybereye", t: "cyberware", n: /^cybereye$/i },
+    { label: "Cyberaudio Suite", t: "cyberware", n: /^cyberaudio suite$/i },
+    { label: "Neural Link", t: "cyberware", n: /^neural link$/i },
+    { label: "Cyberarm", t: "cyberware", n: /^cyberarm$/i },
+    { label: "Cyberleg", t: "cyberware", n: /^cyberleg$/i },
+    { label: "External Cyberware of exactly 1,000eb", t: "cyberware", sub: "external", p: { eq: 1000 }, sample: 4 },
+    { label: "External Cyberware of 500eb or less", t: "cyberware", sub: "external", p: { max: 500 }, sample: 4 },
+    { label: "Internal Cyberware of exactly 1,000eb", t: "cyberware", sub: "internal", p: { eq: 1000 }, sample: 4 },
+    { label: "Internal Cyberware of 500eb or less", t: "cyberware", sub: "internal", p: { max: 500 }, sample: 4 },
+    { label: "Cybereye Option of exactly 1,000eb", t: "cyberware", sub: "cybereye", p: { eq: 1000 }, sample: 4, found: /^cybereye$/i },
+    { label: "Cybereye Option of 500eb or less", t: "cyberware", sub: "cybereye", p: { max: 500 }, sample: 4, found: /^cybereye$/i },
+    { label: "Cyberaudio Option of exactly 1,000eb", t: "cyberware", sub: "cyberaudio", p: { eq: 1000 }, sample: 4, found: /^cyberaudio suite$/i },
+    { label: "Cyberaudio Option of 500eb or less", t: "cyberware", sub: "cyberaudio", p: { max: 500 }, sample: 4, found: /^cyberaudio suite$/i },
+    { label: "Neuralware Option of exactly 1,000eb", t: "cyberware", sub: "neural", p: { eq: 1000 }, sample: 4, found: /^neural link$/i },
+    { label: "Neuralware Option of 500eb or less", t: "cyberware", sub: "neural", p: { max: 500 }, sample: 4, found: /^neural link$/i },
+    { label: "Cyberlimb Option of exactly 1,000eb", t: "cyberware", sub: "cyberarm|cyberleg|cyberlimb", p: { eq: 1000 }, sample: 4, found: /^cyber(arm|leg)$/i },
+    { label: "Cyberlimb Option of 500eb or less", t: "cyberware", sub: "cyberarm|cyberleg|cyberlimb", p: { max: 500 }, sample: 4, found: /^cyber(arm|leg)$/i },
+    { label: "Fashionware of GM's Choice", t: "cyberware", sub: "fashionware", sample: 3, gm: true },
+    { label: "Borgware of GM's Choice", t: "cyberware", sub: "borgware", sample: 2, gm: true },
+    { label: "Any Cyberware of GM's Choice", t: "cyberware", gm: true },
+  ] },
+  5: { label: "Clothing and Fashionware", rows: [
+    { label: "Bag Lady Chic", t: "clothing", sub: "bag lady|bagladychic|bag_lady", sample: 4 },
+    { label: "Gang Colors", t: "clothing", sub: "gang colors|gangcolors|gang_colors", sample: 4 },
+    { label: "Generic Chic", t: "clothing", sub: "generic chic|genericchic|generic_chic", sample: 4 },
+    { label: "Bohemian", t: "clothing", sub: "bohemian", sample: 4 },
+    { label: "Leisurewear", t: "clothing", sub: "leisurewear", sample: 4 },
+    { label: "Nomad Leathers", t: "clothing", sub: "nomad", sample: 4 },
+    { label: "Asia Pop", t: "clothing", sub: "asia pop|asiapop|asia_pop", sample: 4 },
+    { label: "Urban Flash", t: "clothing", sub: "urban flash|urbanflash|urban_flash", sample: 4 },
+    { label: "Businesswear", t: "clothing", sub: "businesswear", sample: 4 },
+    { label: "High Fashion", t: "clothing", sub: "high fashion|highfashion|high_fashion", sample: 4 },
+    { label: "Biomonitor", t: "cyberware", n: /biomonitor/i },
+    { label: "Chemskin", t: "cyberware", n: /chemskin/i },
+    { label: "EMP Threading", t: "cyberware", n: /emp threading/i },
+    { label: "Light Tattoo", t: "cyberware", n: /light tattoo/i },
+    { label: "Shift Tacts", t: "cyberware", n: /shift tacts/i },
+    { label: "Skinwatch", t: "cyberware", n: /skinwatch/i },
+    { label: "Techhair", t: "cyberware", n: /techhair/i },
+    { label: "Generic Chic", t: "clothing", sub: "generic chic|genericchic|generic_chic", sample: 4 },
+    { label: "Leisurewear", t: "clothing", sub: "leisurewear", sample: 4 },
+    { label: "Gang Colors", t: "clothing", sub: "gang colors|gangcolors|gang_colors", sample: 4 },
+  ] },
+  6: { label: "Survival Gear", rows: [
+    { label: "Anti-Smog Breathing Mask", t: "gear", n: /anti-?smog/i },
+    { label: "Auto Level Dampening Ear Protectors", t: "gear", n: /ear protectors/i },
+    { label: "Binoculars", t: "gear", n: /binoculars/i },
+    { label: "Carryall", t: "gear", n: /carryall/i },
+    { label: "Flashlight", t: "gear", n: /flashlight/i },
+    { label: "Duct Tape", t: "gear", n: /duct tape/i },
+    { label: "Inflatable Bed Sleep-bag", t: "gear", n: /inflatable bed|sleep-?bag/i },
+    { label: "Lock Picking Set", t: "gear", n: /lock ?pick/i },
+    { label: "Handcuffs", t: "gear", n: /handcuffs/i },
+    { label: "Medtech Bag", t: "gear", n: /medtech bag/i },
+    { label: "Tent and Camping Equipment", t: "gear", n: /tent/i },
+    { label: "Rope (60m/yds)", t: "gear", n: /^rope/i },
+    { label: "Techtool", t: "gear", n: /techtool/i },
+    { label: "Personal CarePak", t: "gear", n: /carepak/i },
+    { label: "Radiation Suit", t: "gear", n: /radiation suit/i },
+    { label: "Road Flare", t: "gear", n: /road flare/i },
+    { label: "Grapple Gun", t: "gear", n: /grapple gun/i },
+    { label: "Tech Bag", t: "gear", n: /tech bag/i },
+    { label: "Shovel or Axe", t: "gear", n: /shovel|\baxe\b/i },
+    { label: "Airhypo", t: "gear", n: /airhypo/i },
+  ] },
+};
+
+/** d100 band index: 0-5 -> row 0, 6-10 -> row 1, ... 96-100 -> row 19. */
+const nmRowFor = (d100) => NM_STEPS.findIndex((max) => d100 <= max);
+
+/** Does a pool item satisfy a spec? Names are the reliable signal; hints help when present. */
+function nmMatches(item, spec) {
+  const types = Array.isArray(spec.t) ? spec.t : [spec.t];
+  if (!types.includes(item.type)) return false;
+  if (spec.p) {
+    if (spec.p.eq !== undefined && item.price !== spec.p.eq) return false;
+    if (spec.p.max !== undefined && item.price > spec.p.max) return false;
+    if (spec.p.min !== undefined && item.price < spec.p.min) return false;
+  }
+  if (spec.n && !spec.n.test(item.name)) return false;
+  if (spec.sub) {
+    const re = new RegExp(spec.sub, "i");
+    if (!re.test(item.sub || "") && !re.test(item.name)) return false;
+  }
+  return true;
+}
+
+/**
+ * Roll a Night Market from a pool. Pure: takes its randomness so it can be
+ * tested. cfg: { cats: [1..6] | null (roll two), perCat: number | null (roll
+ * 1d10), maxQty, sample }. Returns { items, criteria, blanks, log }.
+ */
+function nightMarket(all, cfg = {}, rng = Math.random) {
+  const die = (n) => 1 + Math.floor(rng() * n);
+  const shuffle = (arr) => arr.map((v) => [rng(), v]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+  const maxQty = Math.max(1, cfg.maxQty ?? 3);
+  const sampleDefault = Math.max(1, cfg.sample ?? 4);
+
+  let cats = (cfg.cats ?? []).filter((c) => NM_CATS[c]);
+  if (!cats.length) {
+    cats = [die(6)];
+    while (cats.length < 2) { const c = die(6); if (!cats.includes(c)) cats.push(c); }
+  }
+
+  const items = new Map();
+  const blanks = [];
+  const log = [];
+  const add = (i) => { if (!items.has(i.uuid)) items.set(i.uuid, entry(i, die(maxQty))); };
+
+  for (const c of cats) {
+    const cat = NM_CATS[c];
+    const count = Math.max(1, cfg.perCat ?? die(10));
+    const rows = new Set();
+    while (rows.size < Math.min(count, cat.rows.length)) rows.add(nmRowFor(die(100)));
+    for (const r of rows) {
+      const spec = cat.rows[r];
+      let hits = all.filter((i) => nmMatches(i, spec));
+      // A named item brings its quality variants along, as the book says.
+      if (spec.n && hits.length) {
+        const base = hits[0].name.replace(/\s*\((poor|excellent)[^)]*\)\s*$/i, "");
+        const variants = all.filter((i) => i.type === hits[0].type && i.name.replace(/\s*\((poor|excellent)[^)]*\)\s*$/i, "") === base);
+        hits = [...new Set([...hits, ...variants])];
+      } else if (hits.length > (spec.sample ?? sampleDefault)) {
+        hits = shuffle(hits).slice(0, spec.sample ?? sampleDefault);
+      }
+      log.push(`${cat.label}: ${spec.label} -> ${hits.length}`);
+      if (!hits.length || spec.gm) blanks.push({ cat: cat.label, row: spec.label, found: hits.length });
+      hits.forEach(add);
+      if (spec.found && hits.length) all.filter((i) => i.type === "cyberware" && spec.found.test(i.name)).forEach(add);
+    }
+  }
+
+  const types = [...new Set([...items.values()].map((i) => i.type))];
+  return { items: [...items.values()], criteria: { types, min: 0, max: 0 }, blanks, log, cats };
+}
+
+async function marketDialog() {
+  const all = await pool();
+  const boxes = Object.entries(NM_CATS)
+    .map(([k, c]) => `<label style="display:inline-block;width:48%">
+      <input type="checkbox" name="c" value="${k}"/> ${c.label}</label>`)
+    .join("");
+
+  return new Promise((resolve) => {
+    new Dialog({
+      title: "Night Market",
+      content: `
+        <p><b>What is sold</b></p>
+        <label><input type="radio" name="how" value="roll" checked/> Roll two categories, as the book does</label><br/>
+        <label><input type="radio" name="how" value="pick"/> Use the categories ticked below</label>
+        <div style="margin:.4em 0 .6em .5em">${boxes}</div>
+        <hr/>
+        <div class="form-group"><label>Item types per category</label>
+          <input type="number" name="per" placeholder="1d10" style="width:80px"/>
+          <span style="opacity:.6">blank rolls 1d10</span></div>
+        <div class="form-group"><label>Max stock of each</label>
+          <input type="number" name="qty" value="3" style="width:80px"/>
+          <span style="opacity:.6">1 to this, at random</span></div>
+        <div class="form-group"><label>Items per class row</label>
+          <input type="number" name="sample" value="4" style="width:80px"/>
+          <span style="opacity:.6">for rows like "Armor of 500eb"</span></div>`,
+      buttons: {
+        go: {
+          icon: '<i class="fas fa-dice"></i>',
+          label: "Roll it",
+          callback: (h) => {
+            const f = h[0];
+            const how = f.querySelector('[name="how"]:checked')?.value ?? "roll";
+            const cats = how === "pick" ? [...f.querySelectorAll('[name="c"]:checked')].map((i) => Number(i.value)) : null;
+            if (how === "pick" && !cats.length) { ui.notifications.warn("Tick at least one category, or let it roll."); return resolve(null); }
+            const perRaw = Number(f.querySelector('[name="per"]').value);
+            const cfg = {
+              cats,
+              perCat: perRaw > 0 ? perRaw : null,
+              maxQty: Math.max(1, Number(f.querySelector('[name="qty"]').value) || 3),
+              sample: Math.max(1, Number(f.querySelector('[name="sample"]').value) || 4),
+            };
+            const m = nightMarket(all, cfg);
+            console.log(`${ID} | Night Market`, m.log);
+            if (!m.items.length) { ui.notifications.error("The rolls found nothing the compendiums can supply."); return resolve(null); }
+            resolve(m);
+          },
+        },
+        cancel: { label: "Cancel", callback: () => resolve(null) },
+      },
+      default: "go",
+      close: () => resolve(null),
+    }).render(true);
+  });
+}
+
+/** Rows the compendiums could not answer, for the GM to fill by hand. */
+function showBlanks(blanks) {
+  const rows = blanks.map((b) => `<li><b>${esc(b.cat)}</b>: ${esc(b.row)}${b.found ? ` (${b.found} found, GM's choice)` : " (nothing matched)"}</li>`).join("");
+  new Dialog({
+    title: "Night Market: rows to fill by hand",
+    content: `<p>The book rolled these, and the compendiums could not supply them or leave the choice to the GM. Add what you want through Edit contents.</p><ul>${rows}</ul>`,
+    buttons: { ok: { label: "OK" } },
+    default: "ok",
+  }).render(true);
 }
 
 /* ------------------------------------------------------------------ */

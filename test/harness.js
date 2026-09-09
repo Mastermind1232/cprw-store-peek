@@ -46,7 +46,7 @@ store.set(`${CRW}.storeExcludedPacks`, {});
 
 const mod = new Function(
   "Hooks", "game", "ui", "foundry", "document", "Dialog", "Actor", "fromUuid", "console",
-  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue };"
+  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue, nightMarket, nmMatches, NM_CATS };"
 )(Hooks, game, ui, foundry, {}, class {}, class {}, async () => null, { log() {}, warn() {}, error() {}, debug() {} });
 
 hooks.init.forEach(f => f());
@@ -256,6 +256,73 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     after.priceMin === before.priceMin && after.priceMax === before.priceMax &&
     game.settings.get(CRW, "storeMarkup") === beforeMarkup,
     `blanked=${blanked} before=${before.priceMin}/${before.priceMax} after=${after.priceMin}/${after.priceMax}`);
+
+  // --- T18: Night Market generator, on a synthetic pool with a seeded rng
+  const nmPool = [
+    { uuid: "W.mp", name: "Medium Pistol", type: "weapon", price: 50, band: "costly", sub: "mediumpistol", quality: "standard" },
+    { uuid: "W.mpp", name: "Medium Pistol (Poor)", type: "weapon", price: 20, band: "everyday", sub: "mediumpistol", quality: "poor" },
+    { uuid: "W.mpe", name: "Medium Pistol (Excellent)", type: "weapon", price: 500, band: "expensive", sub: "mediumpistol", quality: "excellent" },
+    { uuid: "W.hp", name: "Heavy Pistol", type: "weapon", price: 100, band: "premium", sub: "heavypistol" },
+    { uuid: "W.smg", name: "SMG", type: "weapon", price: 100, band: "premium", sub: "smg" },
+    { uuid: "W.hsmg", name: "Heavy SMG", type: "weapon", price: 100, band: "premium", sub: "heavysmg" },
+    { uuid: "W.sg", name: "Shotgun", type: "weapon", price: 500, band: "expensive", sub: "shotgun" },
+    { uuid: "W.ar", name: "Assault Rifle", type: "weapon", price: 500, band: "expensive", sub: "assaultrifle" },
+    { uuid: "W.lm", name: "Light Melee Weapon", type: "weapon", price: 50, band: "costly", sub: "lightmelee" },
+    { uuid: "W.hm", name: "Heavy Melee Weapon", type: "weapon", price: 100, band: "premium", sub: "heavymelee" },
+    { uuid: "W.vhm", name: "Very Heavy Melee Weapon", type: "weapon", price: 100, band: "premium", sub: "veryheavymelee" },
+    { uuid: "A.1", name: "Kevlar", type: "armor", price: 100, band: "premium", sub: "" },
+    { uuid: "A.2", name: "Light Armorjack", type: "armor", price: 100, band: "premium", sub: "" },
+    { uuid: "A.3", name: "Heavy Armorjack", type: "armor", price: 500, band: "expensive", sub: "" },
+    { uuid: "M.1", name: "Basic Ammunition (Medium Pistol)", type: "ammo", price: 10, band: "cheap", sub: "" },
+    { uuid: "M.2", name: "Basic Ammunition (Shotgun)", type: "ammo", price: 10, band: "cheap", sub: "" },
+    { uuid: "C.eye", name: "Cybereye", type: "cyberware", price: 100, band: "premium", sub: "cybereye", foundational: true },
+    { uuid: "C.opt", name: "Image Enhance", type: "cyberware", price: 500, band: "expensive", sub: "cybereye" },
+    { uuid: "C.opt2", name: "Low Light / Infrared / UV", type: "cyberware", price: 500, band: "expensive", sub: "cybereye" },
+    { uuid: "G.agent", name: "Agent", type: "gear", price: 100, band: "premium", sub: "" },
+    { uuid: "G.flash", name: "Flashlight", type: "gear", price: 20, band: "everyday", sub: "" },
+  ];
+  // deterministic rng
+  let seed = 7; const rng = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+
+  // (a) forced category 3, every row, small stock
+  const m3 = mod.nightMarket(nmPool, { cats: [3], perCat: 20, maxQty: 3, sample: 2 }, rng);
+  const ids3 = m3.items.map(i => i.uuid);
+  check("T18 market draws only from the rolled category's types and never duplicates",
+    m3.items.every(i => ["weapon", "armor", "ammo", "itemUpgrade"].includes(i.type)) &&
+    new Set(ids3).size === ids3.length && m3.cats.join() === "3",
+    JSON.stringify(ids3));
+  check("T18b quantities stay within 1..max and stock starts full",
+    m3.items.every(i => i.qty >= 1 && i.qty <= 3 && i.remaining === i.qty));
+  check("T18c a named weapon brings its quality variants",
+    ["W.mp", "W.mpp", "W.mpe"].every(u => ids3.includes(u)), JSON.stringify(ids3));
+  check("T18d class rows are sampled to the limit",
+    m3.items.filter(i => i.type === "armor" && i.price <= 100).length <= 2);
+  check("T18e GM's-choice and empty rows are listed as blanks",
+    m3.blanks.some(b => /Exotic/.test(b.row)) && m3.blanks.some(b => /Sniper/.test(b.row) && b.found === 0),
+    JSON.stringify(m3.blanks.map(b => b.row)));
+  check("T18f criteria carry the types found so a store reshuffle works",
+    m3.criteria.types.includes("weapon") && m3.criteria.min === 0 && m3.criteria.max === 0);
+
+  // (b) rolled categories: exactly two, distinct, and only those
+  const seen = new Set();
+  for (let n = 0; n < 40; n++) {
+    const m = mod.nightMarket(nmPool, { perCat: 1 }, rng);
+    if (m.cats.length !== 2 || m.cats[0] === m.cats[1]) { check("T18g rolls two distinct categories", false, JSON.stringify(m.cats)); break; }
+    m.cats.forEach(c => seen.add(c));
+  }
+  if (!results.some(r => r.name.startsWith("T18g"))) check("T18g rolls two distinct categories", true, `saw ${[...seen].sort().join(",")}`);
+
+  // (c) a cybereye option brings the Cybereye foundational along
+  const m4 = mod.nightMarket(nmPool, { cats: [4], perCat: 20, maxQty: 1 }, rng);
+  const ids4 = m4.items.map(i => i.uuid);
+  check("T18h a cybereye option brings its foundational",
+    (ids4.includes("C.opt") || ids4.includes("C.opt2")) && ids4.includes("C.eye"), JSON.stringify(ids4));
+
+  // (d) matcher edge: "SMG" does not match "Heavy SMG"; "Heavy Melee" does not match "Very Heavy Melee"
+  const smgRow = mod.NM_CATS[3].rows[2], hmRow = mod.NM_CATS[3].rows[13];
+  check("T18i name regexes keep SMG and Heavy Melee distinct from their heavier cousins",
+    mod.nmMatches(nmPool[4], smgRow) && !mod.nmMatches(nmPool[5], smgRow) &&
+    mod.nmMatches(nmPool[9], hmRow) && !mod.nmMatches(nmPool[10], hmRow));
 
   let bad = 0;
   for (const r of results) { if (!r.pass) bad++; console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "  [" + r.detail + "]" : ""}`); }
