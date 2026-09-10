@@ -1182,6 +1182,11 @@ function nightMarket(all, cfg = {}, rng = Math.random) {
   const shuffle = (arr) => arr.map((v) => [rng(), v]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
   const maxQty = Math.max(1, cfg.maxQty ?? 3);
   const sampleDefault = Math.max(1, cfg.sample ?? 4);
+  // Optional price window. The book's rows carry their own prices, so this
+  // only narrows what may fill a row; a row nothing fits becomes a blank.
+  const min = cfg.min > 0 ? cfg.min : 0;
+  const max = cfg.max > 0 ? cfg.max : 0;
+  if (min || max) all = all.filter((i) => (!min || i.price >= min) && (!max || i.price <= max));
 
   let cats = (cfg.cats ?? []).filter((c) => NM_CATS[c]);
   if (!cats.length) {
@@ -1218,7 +1223,7 @@ function nightMarket(all, cfg = {}, rng = Math.random) {
   }
 
   const types = [...new Set([...items.values()].map((i) => i.type))];
-  return { items: [...items.values()], criteria: { types, min: 0, max: 0 }, blanks, log, cats };
+  return { items: [...items.values()], criteria: { types, min, max }, blanks, log, cats };
 }
 
 async function marketDialog() {
@@ -1245,7 +1250,11 @@ async function marketDialog() {
           <span style="opacity:.6">1 to this, at random</span></div>
         <div class="form-group"><label>Items per class row</label>
           <input type="number" name="sample" value="4" style="width:80px"/>
-          <span style="opacity:.6">for rows like "Armor of 500eb"</span></div>`,
+          <span style="opacity:.6">for rows like "Armor of 500eb"</span></div>
+        <div class="form-group"><label>Price window</label>
+          <input type="number" name="min" placeholder="min" style="width:80px"/>
+          <input type="number" name="max" placeholder="max" style="width:80px"/>
+          <span style="opacity:.6">blank is no limit; rows nothing fits are listed as blanks</span></div>`,
       buttons: {
         go: {
           icon: '<i class="fas fa-dice"></i>',
@@ -1261,6 +1270,8 @@ async function marketDialog() {
               perCat: perRaw > 0 ? perRaw : null,
               maxQty: Math.max(1, Number(f.querySelector('[name="qty"]').value) || 3),
               sample: Math.max(1, Number(f.querySelector('[name="sample"]').value) || 4),
+              min: Number(f.querySelector('[name="min"]').value) || 0,
+              max: Number(f.querySelector('[name="max"]').value) || 0,
             };
             const m = nightMarket(all, cfg);
             console.log(`${ID} | Night Market`, m.log);

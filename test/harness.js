@@ -324,6 +324,14 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     mod.nmMatches(nmPool[4], smgRow) && !mod.nmMatches(nmPool[5], smgRow) &&
     mod.nmMatches(nmPool[9], hmRow) && !mod.nmMatches(nmPool[10], hmRow));
 
+  const mw = mod.nightMarket(nmPool, { cats: [3, 4], perCat: 20, maxQty: 1, sample: 9, min: 500, max: 1000 }, rng);
+  check("T18j a price window keeps every item inside it and records it for swaps",
+    mw.items.length > 0 && mw.items.every(i => i.price >= 500 && i.price <= 1000) &&
+    mw.criteria.min === 500 && mw.criteria.max === 1000,
+    JSON.stringify(mw.items.map(i => [i.uuid, i.price])));
+  const mn = mod.nightMarket(nmPool, { cats: [3], perCat: 20, maxQty: 1, sample: 9 }, rng);
+  check("T18k no window means no filtering", mn.items.some(i => i.price < 500) && mn.criteria.min === 0 && mn.criteria.max === 0);
+
   let bad = 0;
   for (const r of results) { if (!r.pass) bad++; console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "  [" + r.detail + "]" : ""}`); }
   console.log(`\n${results.length - bad}/${results.length} passed`);
