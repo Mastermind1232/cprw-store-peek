@@ -1224,8 +1224,8 @@ function nightMarket(all, cfg = {}, rng = Math.random) {
 async function marketDialog() {
   const all = await pool();
   const boxes = Object.entries(NM_CATS)
-    .map(([k, c]) => `<label style="display:inline-block;width:48%">
-      <input type="checkbox" name="c" value="${k}"/> ${c.label}</label>`)
+    .map(([k, c]) => `<label style="display:flex;align-items:center;gap:.4em;white-space:nowrap;margin:0">
+      <input type="checkbox" name="c" value="${k}" style="margin:0"/> ${c.label}</label>`)
     .join("");
 
   return new Promise((resolve) => {
@@ -1235,7 +1235,7 @@ async function marketDialog() {
         <p><b>What is sold</b></p>
         <label><input type="radio" name="how" value="roll" checked/> Roll two categories, as the book does</label><br/>
         <label><input type="radio" name="how" value="pick"/> Use the categories ticked below</label>
-        <div style="margin:.4em 0 .6em .5em">${boxes}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.3em .8em;margin:.4em 0 .6em .5em">${boxes}</div>
         <hr/>
         <div class="form-group"><label>Item types per category</label>
           <input type="number" name="per" placeholder="1d10" style="width:80px"/>
