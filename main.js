@@ -612,7 +612,11 @@ function addRowTools(root, store) {
   });
 }
 
-/** One list instead of a block per compendium. */
+/** The viewer's chosen sort, kept per browser. */
+const SORT_KEY = `${ID}.sort`;
+function sortMode() { try { return localStorage.getItem(SORT_KEY) || "name"; } catch (err) { return "name"; } }
+
+/** One list instead of a block per compendium, in the viewer's chosen order. */
 function mergeSections(root) {
   const list = root.querySelector(".crw-store-items");
   if (!list) return;
@@ -622,8 +626,32 @@ function mergeSections(root) {
   list.querySelectorAll(DIVIDER).forEach((d) => d.remove());
   const nameOf = (r) =>
     r.querySelector(".crw-store-item-name")?.childNodes?.[0]?.textContent?.trim() ?? "";
-  rows.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  const priceOf = (r) => Number((r.querySelector(BUY)?.textContent ?? "").replace(/[^\d]/g, "")) || 0;
+  const byName = (a, b) => nameOf(a).localeCompare(nameOf(b));
+  const mode = sortMode();
+  rows.sort((a, b) =>
+    mode === "priceAsc" ? (priceOf(a) - priceOf(b)) || byName(a, b)
+    : mode === "priceDesc" ? (priceOf(b) - priceOf(a)) || byName(a, b)
+    : byName(a, b));
   rows.forEach((r) => list.appendChild(r));
+}
+
+/** A Sort dropdown in the store header, for everyone. */
+function injectSort(root) {
+  if (root.querySelector(".cprw-sort")) return;
+  const header = root.querySelector(HEADER);
+  if (!header) return;
+  const sel = document.createElement("select");
+  sel.className = "cprw-sort";
+  sel.title = "Sort the list";
+  sel.style.cssText = "flex:0 0 auto;width:auto;margin-left:.5em";
+  sel.innerHTML = '<option value="name">Name</option><option value="priceAsc">Price, low to high</option><option value="priceDesc">Price, high to low</option>';
+  sel.value = sortMode();
+  sel.addEventListener("change", () => {
+    try { localStorage.setItem(SORT_KEY, sel.value); } catch (err) { /* private mode */ }
+    mergeSections(root);
+  });
+  header.appendChild(sel);
 }
 
 function injectBar(root) {
@@ -1539,6 +1567,7 @@ Hooks.on("renderStoreApp", (app, element) => {
     // Last, so rows the store filtered out are never decorated.
     dropTwins(root);
     mergeSections(root);
+    injectSort(root);
     addIcons(root);
   } catch (err) {
     console.error(`${ID} | failed decorating the store`, err);
