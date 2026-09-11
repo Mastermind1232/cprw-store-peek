@@ -181,6 +181,11 @@ async function pool() {
   const excluded = game.settings.get(CRW, "storeExcludedPacks") ?? {};
   const out = [];
 
+  // The Items sidebar is the GM's own library, edits included. When a sidebar
+  // item has the same name and type as a compendium item, the sidebar copy is
+  // the one that sells and the compendium copy is left out.
+  const worldKeys = new Set(game.items.filter((d) => STORE_TYPES.has(d.type)).map(twinKey));
+
   for (const pack of game.packs) {
     if (pack.metadata.type !== "Item") continue;
     if (packSource(pack.metadata.id) === null) continue;
@@ -192,13 +197,28 @@ async function pool() {
       console.warn(`${ID} | could not read pack ${pack.metadata.id}`, e);
       continue;
     }
-    for (const d of docs) if (STORE_TYPES.has(d.type)) out.push(lite(d));
+    for (const d of docs) if (STORE_TYPES.has(d.type) && !worldKeys.has(twinKey(d))) out.push(lite(d));
   }
 
   for (const d of game.items) if (STORE_TYPES.has(d.type)) out.push(lite(d));
 
   _pool = out;
   return out;
+}
+const twinKey = (d) => `${d.type}|${d.name}`;
+function resetPool() { _pool = null; }
+
+/** Hide compendium rows that the sidebar already covers, so the catalogue shows each item once. */
+function dropTwins(root) {
+  const worldKeys = new Set(game.items.filter((d) => STORE_TYPES.has(d.type)).map(twinKey));
+  if (!worldKeys.size) return;
+  root.querySelectorAll(ROW).forEach((row) => {
+    const uuid = row.dataset.uuid ?? "";
+    if (!uuid.startsWith("Compendium.")) return;
+    let e = null;
+    try { e = fromUuidSync(uuid); } catch (err) { return; }
+    if (e && worldKeys.has(twinKey(e))) row.remove();
+  });
 }
 
 /** The store's own visibility rules, minus the transient search box. */
@@ -1521,6 +1541,7 @@ Hooks.on("renderStoreApp", (app, element) => {
     if (store) addRowTools(root, store);
 
     // Last, so rows the store filtered out are never decorated.
+    dropTwins(root);
     mergeSections(root);
     addIcons(root);
   } catch (err) {

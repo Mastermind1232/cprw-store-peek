@@ -46,7 +46,7 @@ store.set(`${CRW}.storeExcludedPacks`, {});
 
 const mod = new Function(
   "Hooks", "game", "ui", "foundry", "document", "Dialog", "Actor", "fromUuid", "console",
-  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue, nightMarket, nmMatches, NM_CATS, shiftBand, drawFrom, lite };"
+  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue, nightMarket, nmMatches, NM_CATS, shiftBand, drawFrom, lite, pool, resetPool };"
 )(Hooks, game, ui, foundry, {}, class {}, class {}, async () => null, { log() {}, warn() {}, error() {}, debug() {} });
 
 hooks.init.forEach(f => f());
@@ -370,6 +370,27 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     check("T21 swaps never draw a hidden item", picked.has("Item.p2") && [...picked].every(u => !blocked.has(u)), JSON.stringify([...picked]));
     avail.blockedItems = [];
     await game.settings.set(CRW, "storeAvailability", avail);
+  }
+
+  {
+    // A compendium item with a same-name twin in the sidebar is left out; the sidebar copy sells.
+    game.packs = [{
+      metadata: { type: "Item", id: "cyberpunk-red-core.core_cyberware", label: "Cyberware" },
+      async getDocuments() {
+        return [
+          { uuid: "Compendium.c.Item.k1", name: "Kerenzikov", type: "cyberware", system: { price: { market: 500 } } },
+          { uuid: "Compendium.c.Item.p1", name: "Pain Editor", type: "cyberware", system: { price: { market: 1000 } } },
+        ];
+      },
+    }];
+    game.items.push({ uuid: "Item.kz", name: "Kerenzikov", type: "cyberware", system: { price: { market: 450 } } });
+    mod.resetPool();
+    const all = await mod.pool();
+    const kz = all.filter(i => i.name === "Kerenzikov");
+    check("T22 sidebar twin wins over its compendium copy, untwinned compendium items stay",
+      kz.length === 1 && kz[0].uuid === "Item.kz" && kz[0].price === 450 && all.some(i => i.uuid === "Compendium.c.Item.p1"),
+      JSON.stringify(all.filter(i => i.type === "cyberware").map(i => i.uuid)));
+    game.packs = []; mod.resetPool();
   }
 
   let bad = 0;
