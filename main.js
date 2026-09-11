@@ -614,7 +614,7 @@ function addRowTools(root, store) {
 
 /** The viewer's chosen sort, kept per browser. */
 const SORT_KEY = `${ID}.sort`;
-function sortMode() { try { return localStorage.getItem(SORT_KEY) || "name"; } catch (err) { return "name"; } }
+function sortMode() { try { return localStorage.getItem(SORT_KEY) || "price"; } catch (err) { return "price"; } }
 
 /** One list instead of a block per compendium, in the viewer's chosen order. */
 function mergeSections(root) {
@@ -629,10 +629,7 @@ function mergeSections(root) {
   const priceOf = (r) => Number((r.querySelector(BUY)?.textContent ?? "").replace(/[^\d]/g, "")) || 0;
   const byName = (a, b) => nameOf(a).localeCompare(nameOf(b));
   const mode = sortMode();
-  rows.sort((a, b) =>
-    mode === "priceAsc" ? (priceOf(a) - priceOf(b)) || byName(a, b)
-    : mode === "priceDesc" ? (priceOf(b) - priceOf(a)) || byName(a, b)
-    : byName(a, b));
+  rows.sort((a, b) => (mode === "price" ? (priceOf(b) - priceOf(a)) || byName(a, b) : byName(a, b)));
   rows.forEach((r) => list.appendChild(r));
 }
 
@@ -645,7 +642,7 @@ function injectSort(root) {
   sel.className = "cprw-sort";
   sel.title = "Sort the list";
   sel.style.cssText = "flex:0 0 auto;width:auto;margin-left:.5em";
-  sel.innerHTML = '<option value="name">Name</option><option value="priceAsc">Price, low to high</option><option value="priceDesc">Price, high to low</option>';
+  sel.innerHTML = '<option value="price">Price</option><option value="name">Alphabetical</option>';
   sel.value = sortMode();
   sel.addEventListener("change", () => {
     try { localStorage.setItem(SORT_KEY, sel.value); } catch (err) { /* private mode */ }
