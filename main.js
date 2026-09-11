@@ -1297,19 +1297,15 @@ async function marketDialog() {
         <label><input type="radio" name="how" value="pick"/> Use the categories ticked below</label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.3em .8em;margin:.4em 0 .6em .5em">${boxes}</div>
         <hr/>
-        <div class="form-group"><label>Item types per category</label>
-          <input type="number" name="per" placeholder="1d10" style="width:80px"/>
-          <span style="opacity:.6">blank rolls 1d10</span></div>
-        <div class="form-group"><label>Max stock of each</label>
-          <input type="number" name="qty" value="3" style="width:80px"/>
-          <span style="opacity:.6">1 to this, at random</span></div>
-        <div class="form-group"><label>Items per class row</label>
-          <input type="number" name="sample" value="4" style="width:80px"/>
-          <span style="opacity:.6">for rows like "Armor of 500eb"</span></div>
-        <div class="form-group"><label>Price window</label>
-          <input type="number" name="min" placeholder="min" style="width:80px"/>
-          <input type="number" name="max" placeholder="max" style="width:80px"/>
-          <span style="opacity:.6">blank is no limit; rows nothing fits are listed as blanks</span></div>`,
+        <div class="form-group" title="How many rows of the table to roll in each category. The book rolls 1d10."><label>Rolls per category</label>
+          <input type="number" name="per" placeholder="1d10" style="width:80px"/></div>
+        <div class="form-group" title="Each item gets a random stock count from 1 up to this."><label>Stock per item, up to</label>
+          <input type="number" name="qty" value="3" style="width:80px"/></div>
+        <div class="form-group" title="When a row names a group rather than one item, such as Armor of 500eb, this many are pulled from the group."><label>Picks per group row</label>
+          <input type="number" name="sample" value="4" style="width:80px"/></div>
+        <div class="form-group" title="Only items priced inside this window are used. Leave blank for no limit."><label>Price, min to max</label>
+          <input type="number" name="min" placeholder="any" style="width:80px"/>
+          <input type="number" name="max" placeholder="any" style="width:80px"/></div>`,
       buttons: {
         go: {
           icon: '<i class="fas fa-dice"></i>',
