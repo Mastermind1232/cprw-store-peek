@@ -146,6 +146,14 @@ function bandFor(price) {
   return "superLuxury";
 }
 const bandOf = (i) => i.band || bandFor(i.price);
+const BAND_ORDER = [...BANDS.map((b) => b[0]), "superLuxury"];
+/** The band `shift` steps up (+) or down (-) the ladder, or null past either end. */
+function shiftBand(band, shift) {
+  const idx = BAND_ORDER.indexOf(band);
+  if (idx < 0) return null;
+  const j = idx + shift;
+  return j >= 0 && j < BAND_ORDER.length ? BAND_ORDER[j] : null;
+}
 
 const lite = (d) => ({
   uuid: d.uuid,
@@ -155,7 +163,8 @@ const lite = (d) => ({
   band: d.system?.price?.category || bandFor(d.system?.price?.market ?? 0),
   // Optional hints, read defensively: the system's subtype, style or quality
   // fields when they exist. The Night Market matcher falls back to names.
-  sub: String(d.system?.weaponType ?? d.system?.type ?? d.system?.style ?? "").toLowerCase(),
+  sub: (d.type === "weapon" ? [d.system?.weaponType] : [d.system?.type, d.system?.style])
+    .filter((x) => typeof x === "string" && x).join(" ").toLowerCase(),
   quality: String(d.system?.quality ?? "").toLowerCase(),
   foundational: d.system?.isFoundational === true,
 });
@@ -498,20 +507,23 @@ function drawFrom(all, { types, band, min = 0, max = Infinity }, exclude) {
   });
 }
 
-async function reshuffleItem(storeId, uuid) {
+/** shift 0 swaps within the item's band; -1 or +1 swaps for the next band down or up. */
+async function reshuffleItem(storeId, uuid, shift = 0) {
   const store = getStores().find((s) => s.id === storeId);
   const old = store?.items.find((i) => i.uuid === uuid);
   if (!old) return;
 
-  const bag = drawFrom(await pool(), criteriaFor(store, old), new Set(store.items.map((i) => i.uuid)));
-  if (!bag.length) return ui.notifications.warn(`Nothing else in the ${bandOf(old)} band to swap ${old.name} for.`);
+  const band = shift ? shiftBand(bandOf(old), shift) : bandOf(old);
+  if (!band) return ui.notifications.warn(`${old.name} is already at the ${shift < 0 ? "cheapest" : "priciest"} tier.`);
+  const bag = drawFrom(await pool(), { types: [old.type], band }, new Set(store.items.map((i) => i.uuid)));
+  if (!bag.length) return ui.notifications.warn(`Nothing in the ${band} band to swap ${old.name} for.`);
 
   const pick = bag[Math.floor(Math.random() * bag.length)];
   await mutateStore(storeId, (st) => {
     const idx = st.items.findIndex((i) => i.uuid === uuid);
     if (idx >= 0) st.items[idx] = entry(pick, old.qty ?? 1);
   });
-  ui.notifications.info(`${old.name} swapped for ${pick.name}.`);
+  ui.notifications.info(`${old.name} swapped for ${pick.name} (${pick.price}eb).`);
 }
 
 async function reshuffleStore(storeId) {
@@ -562,7 +574,11 @@ function addRowTools(root, store) {
     };
 
     actions.append(
-      make("cprw-shuffle", "fa-shuffle", "Swap this for a different item",
+      make("cprw-down", "fa-arrow-down", "Swap this for something one price tier cheaper",
+        () => reshuffleItem(store.id, uuid, -1)),
+      make("cprw-up", "fa-arrow-up", "Swap this for something one price tier pricier",
+        () => reshuffleItem(store.id, uuid, +1)),
+      make("cprw-shuffle", "fa-shuffle", "Swap this for a different item in the same price tier",
         () => reshuffleItem(store.id, uuid)),
       make("cprw-drop", "fa-xmark", "Remove this item from this store",
         () => dropItem(store.id, uuid))
@@ -1289,10 +1305,15 @@ async function marketDialog() {
 
 /** Rows the compendiums could not answer, for the GM to fill by hand. */
 function showBlanks(blanks) {
-  const rows = blanks.map((b) => `<li><b>${esc(b.cat)}</b>: ${esc(b.row)}${b.found ? ` (${b.found} found, GM's choice)` : " (nothing matched)"}</li>`).join("");
+  const picked = blanks.filter((b) => b.found);
+  const empty = blanks.filter((b) => !b.found);
+  const li = (b, note) => `<li><b>${esc(b.cat)}</b>: ${esc(b.row)} ${note}</li>`;
+  const content =
+    (picked.length ? `<p><b>The book says "GM's choice" for these.</b> ${picked.length === 1 ? "It" : "Each"} got random picks for now; use the row buttons to swap or drop them.</p><ul>${picked.map((b) => li(b, `(${b.found} added)`)).join("")}</ul>` : "") +
+    (empty.length ? `<p><b>Nothing in the compendiums fit these rows.</b> Add something by hand through Pick, or leave them empty.</p><ul>${empty.map((b) => li(b, "")).join("")}</ul>` : "");
   new Dialog({
-    title: "Night Market: rows to fill by hand",
-    content: `<p>The book rolled these, and the compendiums could not supply them or leave the choice to the GM. Add what you want through Edit contents.</p><ul>${rows}</ul>`,
+    title: "Night Market: rows to check",
+    content,
     buttons: { ok: { label: "OK" } },
     default: "ok",
   }).render(true);

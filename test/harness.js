@@ -46,7 +46,7 @@ store.set(`${CRW}.storeExcludedPacks`, {});
 
 const mod = new Function(
   "Hooks", "game", "ui", "foundry", "document", "Dialog", "Actor", "fromUuid", "console",
-  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue, nightMarket, nmMatches, NM_CATS };"
+  src + "\nreturn { activate, mutateStore, queueWrite, getStores, getActive, getActiveId, saveStores, currentFilter, esc, entry, reshuffleItem, reshuffleStore, dropItem, criteriaFor, recordSale, restoreCatalogue, nightMarket, nmMatches, NM_CATS, shiftBand, drawFrom, lite };"
 )(Hooks, game, ui, foundry, {}, class {}, class {}, async () => null, { log() {}, warn() {}, error() {}, debug() {} });
 
 hooks.init.forEach(f => f());
@@ -331,6 +331,16 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     JSON.stringify(mw.items.map(i => [i.uuid, i.price])));
   const mn = mod.nightMarket(nmPool, { cats: [3], perCat: 20, maxQty: 1, sample: 9 }, rng);
   check("T18k no window means no filtering", mn.items.some(i => i.price < 500) && mn.criteria.min === 0 && mn.criteria.max === 0);
+
+  check("T19 band ladder steps one tier and stops at the ends",
+    mod.shiftBand("expensive", -1) === "premium" && mod.shiftBand("expensive", 1) === "veryExpensive" &&
+    mod.shiftBand("veryExpensive", 1) === "luxury" && mod.shiftBand("free", -1) === null && mod.shiftBand("superLuxury", 1) === null);
+  check("T19b a tier-down draw returns only the cheaper band of the same type",
+    mod.drawFrom(nmPool, { types: ["cyberware"], band: mod.shiftBand("expensive", -1) }, new Set()).every(i => i.band === "premium" && i.type === "cyberware"));
+  check("T19c cyberware subtype hint comes from system.type, not the junk weaponType",
+    mod.lite({ uuid: "x", name: "Pain Editor", type: "cyberware", system: { price: { market: 1000 }, weaponType: "assaultRifle", type: "neuralWare" } }).sub === "neuralware" &&
+    mod.lite({ uuid: "y", name: "SMG", type: "weapon", system: { price: { market: 100 }, weaponType: "smg" } }).sub === "smg" &&
+    mod.lite({ uuid: "z", name: "Jacket", type: "clothing", system: { price: { market: 100 }, type: "jacket", style: "bagLadyChic" } }).sub === "jacket bagladychic");
 
   let bad = 0;
   for (const r of results) { if (!r.pass) bad++; console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "  [" + r.detail + "]" : ""}`); }
