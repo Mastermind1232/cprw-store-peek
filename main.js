@@ -1230,8 +1230,15 @@ function nightMarket(all, cfg = {}, rng = Math.random) {
       } else if (hits.length > (spec.sample ?? sampleDefault)) {
         hits = shuffle(hits).slice(0, spec.sample ?? sampleDefault);
       }
+      if (!hits.length && spec.p?.eq !== undefined) {
+        // "Exactly 1,000eb" with nothing at that price: the same family at
+        // that price or less, as the GM ruled.
+        const eased = { ...spec, p: { max: spec.p.eq } };
+        hits = shuffle(all.filter((i) => nmMatches(i, eased))).slice(0, spec.sample ?? sampleDefault);
+        if (hits.length) log.push(`${cat.label}: ${spec.label} eased to ${spec.p.eq}eb or less`);
+      }
       if (!hits.length) {
-        // Nothing fit the row as written: stand in one item of the row's type
+        // Nothing fit the row at all: stand in one item of the row's type
         // so the roll finishes on its own. The arrows can move it afterwards.
         const types = Array.isArray(spec.t) ? spec.t : [spec.t];
         const standIns = shuffle(all.filter((i) => types.includes(i.type) && !items.has(i.uuid)));

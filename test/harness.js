@@ -343,6 +343,17 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     mod.lite({ uuid: "y", name: "SMG", type: "weapon", system: { price: { market: 100 }, weaponType: "smg" } }).sub === "smg" &&
     mod.lite({ uuid: "z", name: "Jacket", type: "clothing", system: { price: { market: 100 }, type: "jacket", style: "bagLadyChic" } }).sub === "jacket bagladychic");
 
+  {
+    // "Cybereye Option of exactly 1,000eb": the pool has none at 1,000, so it eases to 1,000 or less within the family.
+    const spec = mod.NM_CATS[4].rows.find(r => /Cybereye Option of exactly/.test(r.label));
+    const eyePool = nmPool.filter(i => i.type === "cyberware");
+    const m = mod.nightMarket(eyePool, { cats: [4], perCat: 20, maxQty: 1, sample: 9 }, rng);
+    check("T20 an 'exactly' row with no match eases to 'or less' in the same family before any stand-in",
+      spec && m.log.some(l => /Cybereye Option of exactly 1,000eb eased to 1000eb or less/.test(l)) &&
+      m.items.some(i => ["C.eye", "C.opt", "C.opt2"].includes(i.uuid) && i.price <= 1000),
+      JSON.stringify(m.log.filter(l => /Cybereye Option/.test(l))));
+  }
+
   let bad = 0;
   for (const r of results) { if (!r.pass) bad++; console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "  [" + r.detail + "]" : ""}`); }
   console.log(`\n${results.length - bad}/${results.length} passed`);
