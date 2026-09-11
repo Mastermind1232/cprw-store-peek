@@ -208,6 +208,12 @@ function catalogueAvailability() {
   return game.settings.get(CRW, "storeAvailability");
 }
 
+/** The pool minus the items the GM has hidden in the Wizards store. Rolls and swaps never touch hidden items. */
+async function sellable() {
+  const blocked = new Set(catalogueAvailability()?.blockedItems ?? []);
+  return (await pool()).filter((i) => !blocked.has(i.uuid));
+}
+
 function currentFilter() {
   const a = catalogueAvailability();
   const blocked = new Set(a.blockedItems ?? []);
@@ -515,7 +521,7 @@ async function reshuffleItem(storeId, uuid, shift = 0) {
 
   const band = shift ? shiftBand(bandOf(old), shift) : bandOf(old);
   if (!band) return ui.notifications.warn(`${old.name} is already at the ${shift < 0 ? "cheapest" : "priciest"} tier.`);
-  const bag = drawFrom(await pool(), { types: [old.type], band }, new Set(store.items.map((i) => i.uuid)));
+  const bag = drawFrom(await sellable(), { types: [old.type], band }, new Set(store.items.map((i) => i.uuid)));
   if (!bag.length) return ui.notifications.warn(`Nothing in the ${band} band to swap ${old.name} for.`);
 
   const pick = bag[Math.floor(Math.random() * bag.length)];
@@ -531,7 +537,7 @@ async function reshuffleStore(storeId) {
   if (!store?.items.length) return;
 
   const qtys = store.items.map((i) => i.qty ?? 1);
-  const bag = drawFrom(await pool(), criteriaFor(store, null), new Set());
+  const bag = drawFrom(await sellable(), criteriaFor(store, null), new Set());
   if (!bag.length) return ui.notifications.warn("Nothing matches this store's criteria.");
 
   const fresh = [];
@@ -967,7 +973,7 @@ async function _create(h, mode) {
 /* ------------------------------------------------------------------ */
 
 async function rollDialog() {
-  const all = await pool();
+  const all = await sellable();
   const boxes = Object.entries(TYPES)
     .map(([k, l]) => `<label style="display:inline-block;width:48%">
       <input type="checkbox" name="t" value="${k}" ${k === "weapon" ? "checked" : ""}/> ${l}</label>`)
@@ -1256,7 +1262,7 @@ function nightMarket(all, cfg = {}, rng = Math.random) {
 }
 
 async function marketDialog() {
-  const all = await pool();
+  const all = await sellable();
   const boxes = Object.entries(NM_CATS)
     .map(([k, c]) => `<label style="display:flex;align-items:center;gap:.4em;white-space:nowrap;margin:0">
       <input type="checkbox" name="c" value="${k}" style="margin:0"/> ${c.label}</label>`)

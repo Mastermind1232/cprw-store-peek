@@ -354,6 +354,24 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
       JSON.stringify(m.log.filter(l => /Cybereye Option/.test(l))));
   }
 
+  {
+    // Hidden items never come back through a swap.
+    const avail = game.settings.get(CRW, "storeAvailability");
+    avail.blockedItems = ["Item.p1"];   // Premium 1 is hidden; Premium 2 and Weapon 2 remain
+    await game.settings.set(CRW, "storeAvailability", avail);
+    const st = { id: "hid", name: "Hid", markup: 100, limited: true, items: [mod.entry({ uuid: "Item.w2", name: "Weapon 2", type: "weapon", price: 100 })] };
+    await mod.saveStores([...mod.getStores(), st]);
+    let picked = new Set();
+    for (let k = 0; k < 25; k++) {
+      await mod.reshuffleItem("hid", mod.getStores().find(s => s.id === "hid").items[0].uuid);
+      picked.add(mod.getStores().find(s => s.id === "hid").items[0].uuid);
+    }
+    const blocked = new Set(avail.blockedItems);
+    check("T21 swaps never draw a hidden item", picked.has("Item.p2") && [...picked].every(u => !blocked.has(u)), JSON.stringify([...picked]));
+    avail.blockedItems = [];
+    await game.settings.set(CRW, "storeAvailability", avail);
+  }
+
   let bad = 0;
   for (const r of results) { if (!r.pass) bad++; console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}${r.detail ? "  [" + r.detail + "]" : ""}`); }
   console.log(`\n${results.length - bad}/${results.length} passed`);
