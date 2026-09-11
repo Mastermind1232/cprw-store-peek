@@ -297,9 +297,10 @@ const check = (name, pass, detail = "") => results.push({ name, pass, detail });
     ["W.mp", "W.mpp", "W.mpe"].every(u => ids3.includes(u)), JSON.stringify(ids3));
   check("T18d class rows are sampled to the limit",
     m3.items.filter(i => i.type === "armor" && i.price <= 100).length <= 2);
-  check("T18e GM's-choice and empty rows are listed as blanks",
-    m3.blanks.some(b => /Exotic/.test(b.row)) && m3.blanks.some(b => /Sniper/.test(b.row) && b.found === 0),
-    JSON.stringify(m3.blanks.map(b => b.row)));
+  check("T18e GM's-choice rows are noted; rows nothing fit get a stand-in of their type instead of a blank",
+    m3.blanks.some(b => /Exotic/.test(b.row)) && !m3.blanks.some(b => /Sniper/.test(b.row)) &&
+    m3.log.some(l => /Sniper.*-> 1$/.test(l)),
+    JSON.stringify(m3.blanks.map(b => b.row)) + " " + JSON.stringify(m3.log.filter(l => /Sniper/.test(l))));
   check("T18f criteria carry the types found so a store reshuffle works",
     m3.criteria.types.includes("weapon") && m3.criteria.min === 0 && m3.criteria.max === 0);
 

@@ -948,7 +948,6 @@ async function _create(h, mode) {
     const m = await marketDialog();
     items = m?.items ?? null;
     criteria = m?.criteria ?? null;
-    if (m?.blanks?.length) showBlanks(m.blanks);
   } else {
     items = await picker([]);
   }
@@ -1231,8 +1230,15 @@ function nightMarket(all, cfg = {}, rng = Math.random) {
       } else if (hits.length > (spec.sample ?? sampleDefault)) {
         hits = shuffle(hits).slice(0, spec.sample ?? sampleDefault);
       }
+      if (!hits.length) {
+        // Nothing fit the row as written: stand in one item of the row's type
+        // so the roll finishes on its own. The arrows can move it afterwards.
+        const types = Array.isArray(spec.t) ? spec.t : [spec.t];
+        const standIns = shuffle(all.filter((i) => types.includes(i.type) && !items.has(i.uuid)));
+        hits = standIns.slice(0, 1);
+      }
       log.push(`${cat.label}: ${spec.label} -> ${hits.length}`);
-      if (!hits.length || spec.gm) blanks.push({ cat: cat.label, row: spec.label, found: hits.length });
+      if (spec.gm) blanks.push({ cat: cat.label, row: spec.label, found: hits.length });
       hits.forEach(add);
       if (spec.found && hits.length) all.filter((i) => i.type === "cyberware" && spec.found.test(i.name)).forEach(add);
     }
