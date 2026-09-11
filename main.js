@@ -575,6 +575,40 @@ async function dropItem(storeId, uuid) {
   });
 }
 
+/** Foundry's drag payload, on v12 or v13. */
+function dragData(ev) {
+  try {
+    const TE = foundry.applications?.ux?.TextEditor?.implementation ?? TextEditor;
+    return TE.getDragEventData(ev);
+  } catch (err) {
+    try { return JSON.parse(ev.dataTransfer.getData("text/plain")); } catch (e) { return null; }
+  }
+}
+
+/** Drop an item from the sidebar or a compendium onto the store window to stock it. Again to add another. */
+function wireDrop(root, store) {
+  if (!game.user.isGM || root.dataset.cprwDrop) return;
+  root.dataset.cprwDrop = "1";
+  root.addEventListener("dragover", (ev) => ev.preventDefault());
+  root.addEventListener("drop", guard(async (ev) => {
+    const data = dragData(ev);
+    if (data?.type !== "Item" || !data.uuid) return;
+    ev.preventDefault();
+    const doc = await fromUuid(data.uuid);
+    if (!doc) return ui.notifications.warn("Could not read that item.");
+    if (doc.parent) return ui.notifications.warn("Drag it from the Items sidebar or a compendium, not off a character.");
+    if (!STORE_TYPES.has(doc.type)) return ui.notifications.warn(`The store cannot sell ${doc.type} items.`);
+    const live = getActive();
+    if (!live) return;
+    await mutateStore(live.id, (st) => {
+      const have = st.items.find((i) => i.uuid === doc.uuid);
+      if (have) { have.qty = (have.qty ?? 1) + 1; have.remaining = (have.remaining ?? 0) + 1; }
+      else st.items.push(entry(lite(doc), 1));
+    });
+    ui.notifications.info(`${doc.name} added to ${live.name}.`);
+  }));
+}
+
 /** Swap and remove, for the GM, on each row of a named store. */
 function addRowTools(root, store) {
   if (!game.user.isGM) return;
@@ -1559,7 +1593,7 @@ Hooks.on("renderStoreApp", (app, element) => {
       }
     }
 
-    if (store) addRowTools(root, store);
+    if (store) { addRowTools(root, store); wireDrop(root, store); }
 
     // Last, so rows the store filtered out are never decorated.
     dropTwins(root);
