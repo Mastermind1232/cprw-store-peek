@@ -267,9 +267,34 @@ function wirePeek(root) {
       if (!uuid) return;
       const doc = await fromUuid(uuid).catch(() => null);
       if (!doc) return ui.notifications.warn("Could not find that item.");
-      doc.sheet.render(true);
+      if (doc.testUserPermission(game.user, "OBSERVER")) return doc.sheet.render(true);
+      // A sidebar item the player may not view: show its compendium twin instead.
+      const twin = await compendiumTwin(doc);
+      if (twin) return twin.sheet.render(true);
+      ui.notifications.warn("The GM has not made this item viewable yet.");
     }));
   });
+}
+
+/** The compendium item with the same name and type, if any. */
+async function compendiumTwin(doc) {
+  for (const pack of game.packs) {
+    if (pack.metadata.type !== "Item") continue;
+    const e = pack.index.find((i) => i.type === doc.type && i.name === doc.name);
+    if (e) return pack.getDocument(e._id);
+  }
+  return null;
+}
+
+/** GM: let players open the sheet of every sidebar item the store could sell. */
+async function shareSidebarItems() {
+  const level = CONST.DOCUMENT_OWNERSHIP_LEVELS.OBSERVER;
+  const updates = game.items
+    .filter((d) => STORE_TYPES.has(d.type) && (d.ownership?.default ?? 0) < level)
+    .map((d) => ({ _id: d.id, "ownership.default": level }));
+  if (!updates.length) return ui.notifications.info("Players can already view every sidebar item the store sells.");
+  await Item.updateDocuments(updates);
+  ui.notifications.info(`${updates.length} sidebar items are now viewable by players.`);
 }
 
 /**
@@ -921,6 +946,7 @@ function manage() {
       snap: { icon: '<i class="fas fa-camera"></i>', label: "Snapshot", callback: (h) => create(h, "snap") },
       roll: { icon: '<i class="fas fa-dice"></i>', label: "Roll", callback: (h) => create(h, "roll") },
       market: { icon: '<i class="fas fa-store"></i>', label: "Night Market", callback: (h) => create(h, "market") },
+      share: { icon: '<i class="fas fa-eye"></i>', label: "Share sidebar items", callback: () => { shareSidebarItems().catch(reportErr); } },
     },
     default: "pick",
     render: (h) => {
